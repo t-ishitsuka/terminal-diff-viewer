@@ -1,5 +1,8 @@
+pub mod app;
+pub mod cli;
 pub mod config;
 pub mod diff;
 pub mod git;
+pub mod task;
 pub mod ui;
 pub mod vfs;
