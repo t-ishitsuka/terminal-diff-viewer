@@ -45,8 +45,7 @@ src/
 │   ├── inline.rs         語単位差分
 │   └── model.rs          AlignedDiff / RowPair / Row
 ├── highlight/
-│   ├── mod.rs            syntect ラッパ
-│   └── cache.rs          行単位パース状態のスナップショット
+│   └── mod.rs            syntect ラッパ。ワーカー側で全行を一括色付けする
 └── task/
     ├── mod.rs            ワーカープール、リクエスト / 結果チャネル
     └── message.rs        TaskRequest / TaskResult
@@ -234,24 +233,28 @@ pub struct BlobContent {
 
 ## 9. 設定
 
-`$XDG_CONFIG_HOME/tdv/config.toml` を読む。存在しない場合は既定値で動作する。
+`$XDG_CONFIG_HOME/tdv/config.toml` (未設定なら `~/.config/tdv/config.toml`) を読む。存在しない場合は既定値で動作する。`--config <PATH>` で明示指定でき、その場合はファイルが無ければエラーにする。
+
+未知のキーや範囲外の値は起動前にエラーとして報告する (端末初期化より前に標準エラーへ出す)。設定を黙って無視すると、効いていない理由が分からなくなるため。
 
 ```toml
 [ui]
-tree_ratio = 3            # 左ペインの比率 (右は 10 - tree_ratio)
+tree_ratio = 3              # 左ペインの比率 (右は 10 - tree_ratio)。1〜8
 show_status_bar = true
 tab_width = 4
 ambiguous_width_wide = false
+syntax_highlight = true
+max_highlight_lines = 20000 # これを超える行数は色付けしない
 
 [diff]
-full_file = true          # 既定で全行表示
-fold_context = 3          # 折り畳み時の前後行数
-inline_words = true       # 語単位ハイライト
-max_file_bytes = 2097152  # これを超えると差分計算しない
+full_file = true            # 既定で全行表示
+fold_context = 3            # 折り畳み時の前後行数
+inline_words = true         # 語単位ハイライト
+max_file_bytes = 2097152    # これを超えると差分計算しない
 
 [theme]
-palette = "red-green"     # または "blue-orange"
-
-[keys]
-# 既定キーマップの上書き
+palette = "red-green"       # または "blue-orange"
+syntax = "base16-ocean.dark"
 ```
+
+キーマップの上書きは未実装。必要になった時点で `[keys]` を追加する。
