@@ -43,7 +43,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let mut lines: Vec<Line> = Vec::with_capacity(ids.len());
     for (row, id) in ids.iter().enumerate() {
         let node = tree.node(*id);
-        let icon = if node.is_dir {
+        let icon = if node.is_dir() {
             if node.expanded { "▾ " } else { "▸ " }
         } else {
             ""
@@ -53,10 +53,11 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         let label = pad_to(&label, width.saturating_sub(2), opts);
 
         let marker = node.status.map_or(' ', |k| k.marker());
-        // 記号だけでなく名前も状態の色で示す
-        let entry_style = node
+        // マーカーは Git の状態、名前はファイル種別を表す
+        let marker_style = node
             .status
-            .map_or(Style::new(), |kind| theme.change_style(kind));
+            .map_or(theme.dim, |kind| theme.change_style(kind));
+        let name_style = theme.entry_style(node.kind, &node.name);
 
         let row_style = if offset + row == selected {
             if focused {
@@ -70,9 +71,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
 
         lines.push(
             Line::from(vec![
-                Span::styled(marker.to_string(), entry_style),
+                Span::styled(marker.to_string(), marker_style),
                 Span::raw(" "),
-                Span::styled(label, entry_style),
+                Span::styled(label, name_style),
             ])
             .style(row_style),
         );

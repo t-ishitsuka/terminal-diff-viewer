@@ -66,7 +66,7 @@ pub fn apply(app: &mut App, action: Action) {
         Action::TreeCollapse => tree_collapse(app),
         Action::TreeToggle => {
             if let Some(id) = app.tree().selected_id()
-                && app.tree().node(id).is_dir
+                && app.tree().node(id).is_dir()
             {
                 app.tree().toggle(id);
                 load_children_if_needed(app, id);
@@ -196,7 +196,7 @@ fn tree_open(app: &mut App) {
     let Some(id) = app.tree().selected_id() else {
         return;
     };
-    if app.tree().node(id).is_dir {
+    if app.tree().node(id).is_dir() {
         app.tree().expand(id);
         load_children_if_needed(app, id);
     } else {
@@ -210,7 +210,7 @@ fn tree_collapse(app: &mut App) {
         return;
     };
     let node = app.tree().node(id);
-    if node.is_dir && node.expanded {
+    if node.is_dir() && node.expanded {
         app.tree().collapse(id);
     } else if let Some(parent) = app.tree().parent_of(id) {
         app.tree().select_node(parent);
@@ -296,7 +296,7 @@ fn step_change_file(app: &mut App, delta: isize) {
     let mut moved = false;
     for _ in 0..app.change_tree.visible_len() {
         app.change_tree.move_selection(delta);
-        let is_file = app.change_tree.selected_node().is_some_and(|n| !n.is_dir);
+        let is_file = app.change_tree.selected_node().is_some_and(|n| !n.is_dir());
         if is_file {
             moved = true;
             break;
@@ -496,13 +496,11 @@ pub fn on_task(app: &mut App, result: TaskResult) {
                     let mut to_select: Option<u32> = None;
                     for entry in entries {
                         let path = parent_path.join(&entry.name);
-                        let child = if entry.is_dir {
-                            Node::dir(entry.name, path.clone(), depth, Some(node))
-                        } else {
-                            Node::file(entry.name, path.clone(), depth, Some(node))
-                        };
+                        let is_dir = entry.kind.is_dir();
+                        let child =
+                            Node::new(entry.name, path.clone(), entry.kind, depth, Some(node));
                         let id = app.fs_tree.push_child(node, child);
-                        if entry.is_dir && app.pending_expand.contains(&path) {
+                        if is_dir && app.pending_expand.contains(&path) {
                             app.fs_tree.expand(id);
                             to_expand.push((id, path.clone()));
                         }

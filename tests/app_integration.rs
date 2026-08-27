@@ -479,3 +479,55 @@ fn filter_keeps_ancestors_of_matches() {
     assert!(screen.contains("added.rs"), "{screen}");
     assert!(!screen.contains("README"), "{screen}");
 }
+
+#[test]
+fn tree_entries_are_colored_by_file_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    // 実行ファイルとシンボリックリンクを用意する
+    let script = dir.path().join("run.sh");
+    std::fs::write(&script, "#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink("README.md", dir.path().join("link.md")).unwrap();
+    }
+
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("ルートの読み込み", |app| {
+        app.fs_tree.node_count() > 1
+    });
+
+    let kinds: Vec<(String, tdv::vfs::EntryKind)> = h
+        .app
+        .fs_tree
+        .visible()
+        .to_vec()
+        .iter()
+        .map(|id| {
+            let node = h.app.fs_tree.node(*id);
+            (node.name.clone(), node.kind)
+        })
+        .collect();
+    let kind_of = |name: &str| kinds.iter().find(|(n, _)| n == name).map(|(_, k)| *k);
+    assert_eq!(kind_of("src"), Some(tdv::vfs::EntryKind::Dir));
+    assert_eq!(kind_of("README.md"), Some(tdv::vfs::EntryKind::File));
+    #[cfg(unix)]
+    {
+        assert_eq!(kind_of("run.sh"), Some(tdv::vfs::EntryKind::Executable));
+        assert_eq!(kind_of("link.md"), Some(tdv::vfs::EntryKind::Symlink));
+    }
+
+    // 種別ごとに色が変わる
+    let theme = tdv::ui::theme::Theme::new(tdv::ui::theme::Palette::RedGreen);
+    let dir_fg = theme.entry_style(tdv::vfs::EntryKind::Dir, "src").fg;
+    let toml_fg = theme
+        .entry_style(tdv::vfs::EntryKind::File, "Cargo.toml")
+        .fg;
+    let md_fg = theme.entry_style(tdv::vfs::EntryKind::File, "README.md").fg;
+    let rs_fg = theme.entry_style(tdv::vfs::EntryKind::File, "main.rs").fg;
+    let mut all = vec![dir_fg, toml_fg, md_fg, rs_fg];
+    all.dedup();
+    assert_eq!(all.len(), 4, "種別ごとに色が分かれていない: {all:?}");
+}

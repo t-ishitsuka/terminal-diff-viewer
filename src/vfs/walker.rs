@@ -3,10 +3,53 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 
+/// ツリーに表示するエントリの種別。色分けの基準になる。
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum EntryKind {
+    Dir,
+    Symlink,
+    Executable,
+    File,
+}
+
+impl EntryKind {
+    pub fn is_dir(self) -> bool {
+        self == EntryKind::Dir
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DirEntry {
     pub name: String,
-    pub is_dir: bool,
+    pub kind: EntryKind,
+}
+
+#[cfg(unix)]
+fn is_executable(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+fn classify(entry: &ignore::DirEntry) -> EntryKind {
+    let Some(file_type) = entry.file_type() else {
+        return EntryKind::File;
+    };
+    // follow_links(false) のため、シンボリックリンクはリンクとして報告される
+    if file_type.is_symlink() {
+        return EntryKind::Symlink;
+    }
+    if file_type.is_dir() {
+        return EntryKind::Dir;
+    }
+    match entry.metadata() {
+        Ok(metadata) if is_executable(&metadata) => EntryKind::Executable,
+        _ => EntryKind::File,
+    }
 }
 
 /// 1 階層だけ読む。全階層を一度に走査すると大規模リポジトリで起動が遅くなるため、
@@ -30,13 +73,16 @@ pub fn read_dir(dir: &Path, show_ignored: bool) -> Result<Vec<DirEntry>> {
         if name == ".git" {
             continue;
         }
-        let is_dir = entry.file_type().is_some_and(|t| t.is_dir());
-        entries.push(DirEntry { name, is_dir });
+        entries.push(DirEntry {
+            name,
+            kind: classify(&entry),
+        });
     }
 
     entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
+        b.kind
+            .is_dir()
+            .cmp(&a.kind.is_dir())
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
             .then_with(|| a.name.cmp(&b.name))
     });

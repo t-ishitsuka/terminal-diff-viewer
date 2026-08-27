@@ -402,7 +402,7 @@ impl App {
             self.content = ContentState::Empty;
             return;
         };
-        if node.is_dir {
+        if node.is_dir() {
             self.content = ContentState::Empty;
             return;
         }

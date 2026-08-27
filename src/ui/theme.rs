@@ -2,6 +2,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use crate::git::ChangeKind;
 use crate::ui::text::Rgb;
+use crate::vfs::EntryKind;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum Palette {
@@ -143,6 +144,20 @@ impl Theme {
         }
     }
 
+    /// ツリーのエントリ色。ディレクトリ・リンク・実行ファイルを区別し、
+    /// 通常ファイルは拡張子の分類で色を変える。
+    pub fn entry_style(&self, kind: EntryKind, name: &str) -> Style {
+        let (rgb, modifier) = match kind {
+            EntryKind::Dir => (entry_color::DIR, Modifier::BOLD),
+            EntryKind::Symlink => (entry_color::SYMLINK, Modifier::ITALIC),
+            EntryKind::Executable => (entry_color::EXECUTABLE, Modifier::BOLD),
+            EntryKind::File => (file_color(name), Modifier::empty()),
+        };
+        Style::new()
+            .fg(self.syntax_color(rgb))
+            .add_modifier(modifier)
+    }
+
     pub fn change_style(&self, kind: ChangeKind) -> Style {
         let color = match kind {
             ChangeKind::Added => Color::Green,
@@ -152,6 +167,102 @@ impl Theme {
             ChangeKind::Untracked => Color::Blue,
         };
         Style::new().fg(color)
+    }
+}
+
+/// ツリーのエントリ色。One Dark 系の色相をそのまま流用する。
+mod entry_color {
+    use super::Rgb;
+
+    pub const DIR: Rgb = Rgb::new(0x61, 0xaf, 0xef);
+    pub const SYMLINK: Rgb = Rgb::new(0x56, 0xb6, 0xc2);
+    pub const EXECUTABLE: Rgb = Rgb::new(0x98, 0xc3, 0x79);
+    pub const SOURCE: Rgb = Rgb::new(0xd1, 0x9a, 0x66);
+    pub const CONFIG: Rgb = Rgb::new(0xe5, 0xc0, 0x7b);
+    pub const DOC: Rgb = Rgb::new(0xc6, 0x78, 0xdd);
+    pub const MEDIA: Rgb = Rgb::new(0xe0, 0x6c, 0x75);
+    pub const ARCHIVE: Rgb = Rgb::new(0xbe, 0x50, 0x46);
+    pub const PLAIN: Rgb = Rgb::new(0xab, 0xb2, 0xbf);
+}
+
+const SOURCE_EXT: &[&str] = &[
+    "rs", "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "go", "c", "h", "cc", "cpp", "hpp", "cs",
+    "java", "kt", "kts", "rb", "php", "swift", "scala", "hs", "ml", "ex", "exs", "erl", "lua",
+    "nix", "zig", "dart", "vim", "el", "clj", "sql", "sh", "bash", "zsh", "fish", "ps1",
+];
+const CONFIG_EXT: &[&str] = &[
+    "toml",
+    "yaml",
+    "yml",
+    "json",
+    "jsonc",
+    "ini",
+    "conf",
+    "cfg",
+    "properties",
+    "lock",
+    "env",
+    "editorconfig",
+    "gitignore",
+    "gitattributes",
+    "csv",
+    "tsv",
+    "xml",
+    "plist",
+];
+const DOC_EXT: &[&str] = &[
+    "md", "markdown", "txt", "rst", "adoc", "org", "tex", "pdf", "html", "htm", "css", "scss",
+    "sass", "less",
+];
+const MEDIA_EXT: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "mp3", "wav", "flac", "mp4", "mov",
+    "webm", "ttf", "otf", "woff", "woff2",
+];
+const ARCHIVE_EXT: &[&str] = &[
+    "zip", "tar", "gz", "tgz", "bz2", "xz", "zst", "7z", "rar", "jar", "deb", "rpm",
+];
+/// 拡張子を持たないが分類できるファイル名。
+const CONFIG_NAMES: &[&str] = &[
+    "makefile",
+    "justfile",
+    "dockerfile",
+    "containerfile",
+    "procfile",
+    "cargo.lock",
+    "flake.lock",
+];
+const DOC_NAMES: &[&str] = &[
+    "readme",
+    "license",
+    "licence",
+    "changelog",
+    "authors",
+    "notice",
+];
+
+fn file_color(name: &str) -> Rgb {
+    let lower = name.to_lowercase();
+    if CONFIG_NAMES.contains(&lower.as_str()) {
+        return entry_color::CONFIG;
+    }
+    if DOC_NAMES.contains(&lower.as_str()) {
+        return entry_color::DOC;
+    }
+    let Some((_, ext)) = lower.rsplit_once('.') else {
+        return entry_color::PLAIN;
+    };
+    if SOURCE_EXT.contains(&ext) {
+        entry_color::SOURCE
+    } else if CONFIG_EXT.contains(&ext) {
+        entry_color::CONFIG
+    } else if DOC_EXT.contains(&ext) {
+        entry_color::DOC
+    } else if MEDIA_EXT.contains(&ext) {
+        entry_color::MEDIA
+    } else if ARCHIVE_EXT.contains(&ext) {
+        entry_color::ARCHIVE
+    } else {
+        entry_color::PLAIN
     }
 }
 
@@ -181,6 +292,33 @@ mod tests {
         assert_eq!(to_ansi256(Rgb::new(255, 255, 255)), 231);
         assert_eq!(to_ansi256(Rgb::new(255, 0, 0)), 196);
         assert_eq!(to_ansi256(Rgb::new(0, 255, 0)), 46);
+    }
+
+    #[test]
+    fn file_colors_follow_the_extension_category() {
+        assert_eq!(file_color("main.rs"), entry_color::SOURCE);
+        assert_eq!(file_color("Cargo.toml"), entry_color::CONFIG);
+        assert_eq!(file_color("README.md"), entry_color::DOC);
+        assert_eq!(file_color("logo.png"), entry_color::MEDIA);
+        assert_eq!(file_color("dump.tar.gz"), entry_color::ARCHIVE);
+        assert_eq!(file_color("unknown"), entry_color::PLAIN);
+    }
+
+    #[test]
+    fn extensionless_known_names_are_classified() {
+        assert_eq!(file_color("Makefile"), entry_color::CONFIG);
+        assert_eq!(file_color("LICENSE"), entry_color::DOC);
+    }
+
+    #[test]
+    fn entry_kind_takes_precedence_over_extension() {
+        let theme = Theme::new(Palette::RedGreen);
+        let dir = theme.entry_style(EntryKind::Dir, "src.rs");
+        let file = theme.entry_style(EntryKind::File, "src.rs");
+        assert_ne!(dir.fg, file.fg);
+        assert!(dir.add_modifier.contains(Modifier::BOLD));
+        let link = theme.entry_style(EntryKind::Symlink, "src.rs");
+        assert!(link.add_modifier.contains(Modifier::ITALIC));
     }
 
     #[test]

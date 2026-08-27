@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use super::walker::EntryKind;
 use crate::git::ChangeKind;
 
 #[derive(Clone, Debug)]
@@ -7,7 +8,7 @@ pub struct Node {
     pub name: String,
     /// ルートからの相対パス。ルート自身は空。
     pub path: PathBuf,
-    pub is_dir: bool,
+    pub kind: EntryKind,
     pub depth: u16,
     pub parent: Option<u32>,
     /// None は未読み込み。ディレクトリの遅延展開に使う。
@@ -17,30 +18,36 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn dir(name: impl Into<String>, path: PathBuf, depth: u16, parent: Option<u32>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        path: PathBuf,
+        kind: EntryKind,
+        depth: u16,
+        parent: Option<u32>,
+    ) -> Self {
         Self {
             name: name.into(),
             path,
-            is_dir: true,
+            kind,
             depth,
             parent,
-            children: None,
+            // ディレクトリだけが遅延読み込みの対象
+            children: (!kind.is_dir()).then(Vec::new),
             expanded: false,
             status: None,
         }
     }
 
+    pub fn dir(name: impl Into<String>, path: PathBuf, depth: u16, parent: Option<u32>) -> Self {
+        Self::new(name, path, EntryKind::Dir, depth, parent)
+    }
+
     pub fn file(name: impl Into<String>, path: PathBuf, depth: u16, parent: Option<u32>) -> Self {
-        Self {
-            name: name.into(),
-            path,
-            is_dir: false,
-            depth,
-            parent,
-            children: Some(Vec::new()),
-            expanded: false,
-            status: None,
-        }
+        Self::new(name, path, EntryKind::File, depth, parent)
+    }
+
+    pub fn is_dir(&self) -> bool {
+        self.kind.is_dir()
     }
 }
 
@@ -65,15 +72,10 @@ impl Default for TreeModel {
 impl TreeModel {
     pub fn new() -> Self {
         let root = Node {
-            name: String::new(),
-            path: PathBuf::new(),
-            is_dir: true,
-            depth: 0,
-            parent: None,
-            children: None,
             expanded: true,
-            status: None,
+            ..Node::dir(String::new(), PathBuf::new(), 0, None)
         };
+
         Self {
             nodes: vec![root],
             visible: Vec::new(),
@@ -113,7 +115,7 @@ impl TreeModel {
     pub fn expanded_dir_paths(&self) -> Vec<PathBuf> {
         self.nodes
             .iter()
-            .filter(|n| n.is_dir && n.expanded && n.parent.is_some())
+            .filter(|n| n.is_dir() && n.expanded && n.parent.is_some())
             .map(|n| n.path.clone())
             .collect()
     }
@@ -181,7 +183,7 @@ impl TreeModel {
                 while let Some(id) = stack.pop() {
                     visible.push(id);
                     let n = &self.nodes[id as usize];
-                    if n.is_dir
+                    if n.is_dir()
                         && n.expanded
                         && let Some(children) = &n.children
                     {
@@ -260,7 +262,7 @@ impl TreeModel {
 
     pub fn expand(&mut self, id: u32) {
         let n = &mut self.nodes[id as usize];
-        if n.is_dir && !n.expanded {
+        if n.is_dir() && !n.expanded {
             n.expanded = true;
             self.dirty = true;
         }
@@ -268,7 +270,7 @@ impl TreeModel {
 
     pub fn collapse(&mut self, id: u32) {
         let n = &mut self.nodes[id as usize];
-        if n.is_dir && n.expanded {
+        if n.is_dir() && n.expanded {
             n.expanded = false;
             self.dirty = true;
         }
@@ -276,7 +278,7 @@ impl TreeModel {
 
     pub fn toggle(&mut self, id: u32) {
         let n = &mut self.nodes[id as usize];
-        if n.is_dir {
+        if n.is_dir() {
             n.expanded = !n.expanded;
             self.dirty = true;
         }
