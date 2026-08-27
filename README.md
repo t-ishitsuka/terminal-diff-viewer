@@ -7,12 +7,13 @@
 ## 使い方
 
 ```sh
-cargo run -- [PATH]         # tree モードで起動
-cargo run -- [PATH] --diff  # diff モードで起動
-cargo build --release       # target/release/tdv
+cargo run -- [PATH]    # 起動 (常に tree モード)
+cargo build --release  # target/release/tdv
 ```
 
 `PATH` を省略するとカレントディレクトリを対象にする。Git リポジトリ外でも tree モードは動作する。
+
+起動方法は 1 つのみ。モードは起動後に `m` (トグル) または `t` / `d` で切り替える。
 
 主なキー: `m` モード切替 / `Tab` ペイン移動 / `j` `k` 移動 / `Enter` 開く / `]c` `[c` 変更箇所ジャンプ / `]f` `[f` 変更ファイル移動 / `z` 折り畳み / `u` unified 表示 / `r` リロード / `?` ヘルプ / `q` 終了
 
