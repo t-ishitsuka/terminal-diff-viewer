@@ -66,9 +66,12 @@ struct Harness {
 
 impl Harness {
     fn new(root: &Path, width: u16, height: u16) -> Self {
+        Self::with_config(root, width, height, Config::default())
+    }
+
+    fn with_config(root: &Path, width: u16, height: u16, cfg: Config) -> Self {
         let backend: Arc<dyn GitBackend> =
             Arc::new(GixBackend::discover(root).expect("リポジトリを開けない"));
-        let cfg = Config::default();
         let (tx, rx) = channel::<AppEvent>();
         let ctx = Arc::new(WorkerCtx {
             backend: Some(Arc::clone(&backend)),
@@ -250,4 +253,229 @@ fn narrow_terminal_hides_tree_when_content_is_focused() {
     h.app.focus = Focus::Content;
     let screen = h.render();
     assert!(!screen.contains("TREE"), "縮退時は左ペインを隠す\n{screen}");
+}
+
+/// 指定した文字列が描画されているセルの style を返す。
+fn style_of(h: &mut Harness, needle: char) -> Vec<ratatui::style::Style> {
+    h.terminal.clear().unwrap();
+    let app = &mut h.app;
+    h.terminal.draw(|frame| tdv::ui::draw(frame, app)).unwrap();
+    let buffer = h.terminal.backend().buffer().clone();
+    let area = *buffer.area();
+    let mut out = Vec::new();
+    for y in 0..area.height {
+        for x in 0..area.width {
+            if let Some(cell) = buffer.cell((x, y))
+                && cell.symbol() == needle.to_string()
+            {
+                out.push(cell.style());
+            }
+        }
+    }
+    out
+}
+
+fn open_main_rs(h: &mut Harness) {
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+    h.act(Action::SetMode(Mode::Diff));
+    h.pump_until("差分の計算", |app| {
+        matches!(&app.content, ContentState::Diff(_))
+    });
+    while h
+        .app
+        .content
+        .path()
+        .is_none_or(|p| p != Path::new("src/main.rs"))
+    {
+        h.act(Action::NextFile);
+        h.pump_until("差分の計算", |app| {
+            matches!(&app.content, ContentState::Diff(_))
+        });
+    }
+}
+
+#[test]
+fn changed_rows_are_colored() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    open_main_rs(&mut h);
+
+    let theme = tdv::ui::theme::Theme::new(tdv::ui::theme::Palette::RedGreen);
+    // 削除行のマーカー '-' には削除側の背景色が付く
+    let minus = style_of(&mut h, '-');
+    assert!(
+        minus.iter().any(|s| s.bg == Some(theme.removed_bg)),
+        "削除行に背景色が付いていない: {minus:?}"
+    );
+    let plus = style_of(&mut h, '+');
+    assert!(
+        plus.iter().any(|s| s.bg == Some(theme.added_bg)),
+        "追加行に背景色が付いていない: {plus:?}"
+    );
+}
+
+#[test]
+fn syntax_highlight_is_applied_to_diff() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    open_main_rs(&mut h);
+
+    let ContentState::Diff(view) = &h.app.content else {
+        panic!("差分が表示されていない");
+    };
+    // src/main.rs は Rust として認識され、色が付く
+    let highlight = view.new_highlight.as_ref().expect("色付けされる");
+    assert!(!highlight.line(0).is_empty(), "1 行目に色が付かない");
+}
+
+#[test]
+fn syntax_highlight_can_be_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let cfg = Config {
+        syntax_highlight: false,
+        ..Config::default()
+    };
+    let mut h = Harness::with_config(dir.path(), 120, 30, cfg);
+    open_main_rs(&mut h);
+
+    let ContentState::Diff(view) = &h.app.content else {
+        panic!("差分が表示されていない");
+    };
+    assert!(view.new_highlight.is_none());
+}
+
+#[test]
+fn search_finds_matches_and_highlights_them() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    open_main_rs(&mut h);
+
+    h.act(Action::StartSearch);
+    for c in "line 20".chars() {
+        h.act(Action::InputChar(c));
+    }
+    assert_eq!(
+        h.app.search.hits.len(),
+        2,
+        "左右それぞれで 1 件ずつ一致する"
+    );
+    h.act(Action::InputSubmit);
+    // 一致行まで自動でスクロールする
+    let ContentState::Diff(view) = &h.app.content else {
+        panic!()
+    };
+    assert!(view.offset > 0, "一致位置までスクロールしていない");
+
+    let theme = tdv::ui::theme::Theme::new(tdv::ui::theme::Palette::RedGreen);
+    let cells = style_of(&mut h, '2');
+    assert!(
+        cells.iter().any(|s| s.bg == Some(theme.search_bg)),
+        "検索一致が強調されていない"
+    );
+}
+
+#[test]
+fn search_without_match_reports_it() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    open_main_rs(&mut h);
+
+    h.act(Action::StartSearch);
+    for c in "存在しない文字列".chars() {
+        h.act(Action::InputChar(c));
+    }
+    h.act(Action::InputSubmit);
+    assert!(h.app.search.hits.is_empty());
+    assert!(
+        h.app
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("一致なし")),
+        "{:?}",
+        h.app.notice
+    );
+}
+
+#[test]
+fn search_is_case_insensitive_unless_query_has_uppercase() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    open_main_rs(&mut h);
+
+    h.act(Action::StartSearch);
+    for c in "LINE".chars() {
+        h.act(Action::InputChar(c));
+    }
+    assert!(h.app.search.hits.is_empty(), "大文字を含む検索は区別する");
+
+    h.act(Action::InputBackspace);
+    h.act(Action::InputBackspace);
+    h.act(Action::InputBackspace);
+    h.act(Action::InputBackspace);
+    for c in "line".chars() {
+        h.act(Action::InputChar(c));
+    }
+    assert!(!h.app.search.hits.is_empty(), "小文字のみなら区別しない");
+}
+
+#[test]
+fn filter_narrows_the_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("ルートの読み込み", |app| {
+        app.fs_tree.node_count() > 1
+    });
+    let before = h.app.fs_tree.visible_len();
+
+    h.act(Action::StartFilter);
+    for c in "readme".chars() {
+        h.act(Action::InputChar(c));
+    }
+    let after = h.app.fs_tree.visible_len();
+    assert!(
+        after < before,
+        "絞り込みで件数が減っていない ({before} -> {after})"
+    );
+    let screen = h.render();
+    assert!(screen.contains("README.md"), "{screen}");
+    assert!(!screen.contains("untracked.txt"), "{screen}");
+
+    h.act(Action::InputCancel);
+    assert_eq!(h.app.fs_tree.visible_len(), before, "取り消しで元に戻る");
+}
+
+#[test]
+fn filter_keeps_ancestors_of_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("ルートの読み込み", |app| {
+        app.fs_tree.node_count() > 1
+    });
+    // src を展開して子を読み込ませる
+    let src = h.app.fs_tree.find_by_path(Path::new("src")).unwrap();
+    h.app.fs_tree.select_node(src);
+    h.act(Action::TreeOpen);
+    h.pump_until("src の読み込み", |app| {
+        app.fs_tree.children_count(src) > 0
+    });
+
+    h.act(Action::StartFilter);
+    for c in "added".chars() {
+        h.act(Action::InputChar(c));
+    }
+    let screen = h.render();
+    assert!(
+        screen.contains("src"),
+        "祖先ディレクトリが残らない\n{screen}"
+    );
+    assert!(screen.contains("added.rs"), "{screen}");
+    assert!(!screen.contains("README"), "{screen}");
 }
