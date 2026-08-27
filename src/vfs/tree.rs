@@ -52,6 +52,8 @@ pub struct TreeModel {
     selected: usize,
     offset: usize,
     dirty: bool,
+    /// ファイル名の絞り込み。小文字化した部分一致で判定する。
+    filter: Option<String>,
 }
 
 impl Default for TreeModel {
@@ -78,6 +80,7 @@ impl TreeModel {
             selected: 0,
             offset: 0,
             dirty: true,
+            filter: None,
         }
     }
 
@@ -131,22 +134,63 @@ impl TreeModel {
         self.nodes[id as usize].status = status;
     }
 
-    fn rebuild(&mut self) {
-        self.visible.clear();
-        let mut stack: Vec<u32> = Vec::new();
-        if let Some(children) = &self.nodes[0].children {
-            stack.extend(children.iter().rev());
-        }
-        while let Some(id) = stack.pop() {
-            self.visible.push(id);
-            let n = &self.nodes[id as usize];
-            if n.is_dir
-                && n.expanded
-                && let Some(children) = &n.children
-            {
-                stack.extend(children.iter().rev());
+    pub fn filter(&self) -> Option<&str> {
+        self.filter.as_deref()
+    }
+
+    /// 絞り込みを設定する。一致するノードとその祖先だけが可視になる。
+    pub fn set_filter(&mut self, filter: Option<String>) {
+        self.filter = filter.filter(|f| !f.is_empty()).map(|f| f.to_lowercase());
+        self.dirty = true;
+    }
+
+    /// 絞り込み時の可視ノード収集。子孫に一致があれば祖先も残す。
+    fn collect_filtered(&self, id: u32, needle: &str, out: &mut Vec<u32>) -> bool {
+        let node = &self.nodes[id as usize];
+        let hit = node.name.to_lowercase().contains(needle);
+        let start = out.len();
+        out.push(id);
+        let mut child_hit = false;
+        if let Some(children) = &node.children {
+            for child in children {
+                child_hit |= self.collect_filtered(*child, needle, out);
             }
         }
+        if hit || child_hit {
+            true
+        } else {
+            out.truncate(start);
+            false
+        }
+    }
+
+    fn rebuild(&mut self) {
+        let mut visible = Vec::new();
+        match self.filter.clone() {
+            Some(needle) => {
+                let roots = self.nodes[0].children.clone().unwrap_or_default();
+                for child in roots {
+                    self.collect_filtered(child, &needle, &mut visible);
+                }
+            }
+            None => {
+                let mut stack: Vec<u32> = Vec::new();
+                if let Some(children) = &self.nodes[0].children {
+                    stack.extend(children.iter().rev());
+                }
+                while let Some(id) = stack.pop() {
+                    visible.push(id);
+                    let n = &self.nodes[id as usize];
+                    if n.is_dir
+                        && n.expanded
+                        && let Some(children) = &n.children
+                    {
+                        stack.extend(children.iter().rev());
+                    }
+                }
+            }
+        }
+        self.visible = visible;
         self.dirty = false;
         if self.selected >= self.visible.len() {
             self.selected = self.visible.len().saturating_sub(1);

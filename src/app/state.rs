@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::config::Config;
 use crate::diff::{AlignedDiff, InlineSpans, LineTable, RowKind, inline_diff};
 use crate::git::{ChangeKind, ChangeSet, FileChange, GitBackend, HeadInfo, UnsupportedReason};
+use crate::highlight::Highlighted;
 use crate::task::{Pool, TaskRequest};
 use crate::vfs::{Node, TreeModel};
 
@@ -21,15 +23,73 @@ pub enum Focus {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum InputKind {
+    /// 内容ペインの検索。
+    Search,
+    /// ツリーのファイル名絞り込み。
+    Filter,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Overlay {
     None,
     Help,
+    Input { kind: InputKind, buffer: String },
 }
 
-#[derive(Clone, Debug)]
+impl Overlay {
+    pub fn is_input(&self) -> bool {
+        matches!(self, Overlay::Input { .. })
+    }
+}
+
+/// 内容ペイン内の検索結果。行と左右の別ごとに一致範囲を引けるようにしておく。
+#[derive(Clone, Debug, Default)]
+pub struct SearchState {
+    pub query: String,
+    by_row: HashMap<(u32, bool), Vec<Range<usize>>>,
+    pub hits: Vec<(u32, bool)>,
+    pub current: usize,
+}
+
+impl SearchState {
+    pub fn is_active(&self) -> bool {
+        !self.query.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.query.clear();
+        self.by_row.clear();
+        self.hits.clear();
+        self.current = 0;
+    }
+
+    pub fn set(&mut self, query: String, matches: Vec<(u32, bool, Range<usize>)>) {
+        self.query = query;
+        self.by_row.clear();
+        self.hits.clear();
+        self.current = 0;
+        for (row, right, range) in matches {
+            let entry = self.by_row.entry((row, right)).or_default();
+            if entry.is_empty() {
+                self.hits.push((row, right));
+            }
+            entry.push(range);
+        }
+        self.hits.sort_unstable();
+    }
+
+    pub fn ranges(&self, row: u32, right: bool) -> &[Range<usize>] {
+        self.by_row
+            .get(&(row, right))
+            .map_or(&[][..], Vec::as_slice)
+    }
+}
+
 pub struct TextView {
     pub path: PathBuf,
     pub table: LineTable,
+    pub highlight: Option<Arc<Highlighted>>,
     pub offset: usize,
     pub hscroll: usize,
 }
@@ -44,6 +104,8 @@ pub enum DisplayRow {
 pub struct DiffView {
     pub change: FileChange,
     pub diff: AlignedDiff,
+    pub old_highlight: Option<Arc<Highlighted>>,
+    pub new_highlight: Option<Arc<Highlighted>>,
     pub folded: bool,
     pub display: Vec<DisplayRow>,
     pub expanded_gaps: HashSet<u32>,
@@ -53,10 +115,19 @@ pub struct DiffView {
 }
 
 impl DiffView {
-    pub fn new(change: FileChange, diff: AlignedDiff, folded: bool, context: usize) -> Self {
+    pub fn new(
+        change: FileChange,
+        diff: AlignedDiff,
+        old_highlight: Option<Arc<Highlighted>>,
+        new_highlight: Option<Arc<Highlighted>>,
+        folded: bool,
+        context: usize,
+    ) -> Self {
         let mut view = Self {
             change,
             diff,
+            old_highlight,
+            new_highlight,
             folded,
             display: Vec::new(),
             expanded_gaps: HashSet::new(),
@@ -163,7 +234,7 @@ impl DiffView {
             let new = pair.right.line().map(|i| self.diff.new.line_display(i));
             match (old.map(std::str::from_utf8), new.map(std::str::from_utf8)) {
                 (Some(Ok(o)), Some(Ok(n))) => inline_diff(o, n),
-                // 不正な UTF-8 の行は語単位に分解せず、行全体を強調する
+                // 不正な UTF-8 の行は語単位に分解しない
                 _ => InlineSpans::default(),
             }
         } else {
@@ -179,7 +250,7 @@ pub enum ContentState {
     Loading {
         path: PathBuf,
     },
-    Text(TextView),
+    Text(Box<TextView>),
     Diff(Box<DiffView>),
     /// 仕様上の正常な結果 (バイナリ / サイズ超過)。
     Unsupported {
@@ -219,6 +290,7 @@ pub struct App {
     pub change_tree: TreeModel,
     pub changes: ChangeSet,
     pub content: ContentState,
+    pub search: SearchState,
     pub notice: Option<String>,
     pub generation: u64,
     pub status_generation: u64,
@@ -256,6 +328,7 @@ impl App {
             change_tree: TreeModel::new(),
             changes: ChangeSet::default(),
             content: ContentState::Empty,
+            search: SearchState::default(),
             notice: None,
             generation: 0,
             status_generation: 0,
@@ -316,6 +389,12 @@ impl App {
         });
     }
 
+    fn highlight_options(&self) -> Option<(String, usize)> {
+        self.cfg
+            .syntax_highlight
+            .then(|| (self.cfg.syntax_theme.clone(), self.cfg.max_highlight_lines))
+    }
+
     /// ツリーの選択に応じて右ペインの読み込みを依頼する。
     /// 世代番号を進めることで、押しっぱなしの移動中に届く古い結果を捨てられる。
     pub fn request_content(&mut self) {
@@ -328,6 +407,8 @@ impl App {
             return;
         }
         let generation = self.next_generation();
+        let highlight = self.highlight_options();
+        self.search.clear();
         match self.mode {
             Mode::Tree => {
                 let abs = self.root.join(&node.path);
@@ -338,6 +419,7 @@ impl App {
                     generation,
                     path: node.path,
                     abs,
+                    highlight,
                 });
             }
             Mode::Diff => {
@@ -348,8 +430,11 @@ impl App {
                 self.content = ContentState::Loading {
                     path: node.path.clone(),
                 };
-                self.pool
-                    .submit(TaskRequest::ComputeDiff { generation, change });
+                self.pool.submit(TaskRequest::ComputeDiff {
+                    generation,
+                    change,
+                    highlight,
+                });
             }
         }
     }

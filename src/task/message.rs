@@ -1,10 +1,15 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use ratatui::crossterm::event::Event;
 
-use crate::diff::AlignedDiff;
+use crate::diff::{AlignedDiff, LineTable};
 use crate::git::{ChangeSet, FileChange, HeadInfo, UnsupportedReason};
+use crate::highlight::Highlighted;
 use crate::vfs::DirEntry;
+
+/// シンタックスハイライトの指定。無効なら None。
+pub type HighlightOptions = Option<(String, usize)>;
 
 #[derive(Clone, Debug)]
 pub enum TaskRequest {
@@ -21,10 +26,12 @@ pub enum TaskRequest {
         generation: u64,
         path: PathBuf,
         abs: PathBuf,
+        highlight: HighlightOptions,
     },
     ComputeDiff {
         generation: u64,
         change: FileChange,
+        highlight: HighlightOptions,
     },
 }
 
@@ -36,13 +43,20 @@ pub struct StatusOutcome {
 
 #[derive(Clone, Debug)]
 pub enum Content {
-    Ready(AlignedDiff),
+    Ready {
+        diff: Box<AlignedDiff>,
+        old_highlight: Option<Arc<Highlighted>>,
+        new_highlight: Option<Arc<Highlighted>>,
+    },
     Unsupported(UnsupportedReason),
 }
 
 #[derive(Clone, Debug)]
 pub enum TextOutcome {
-    Ready(crate::diff::LineTable),
+    Ready {
+        table: LineTable,
+        highlight: Option<Arc<Highlighted>>,
+    },
     Unsupported(UnsupportedReason),
 }
 

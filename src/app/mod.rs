@@ -45,7 +45,7 @@ where
 fn handle(app: &mut App, keymap: &mut KeyMap, event: AppEvent) {
     match event {
         AppEvent::Input(Event::Key(key)) => {
-            let action = keymap.map(key, app.focus, app.overlay);
+            let action = keymap.map(key, app.focus, &app.overlay);
             update::apply(app, action);
         }
         AppEvent::Input(_) => {}

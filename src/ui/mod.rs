@@ -1,6 +1,7 @@
 pub mod content_pane;
 pub mod diff_pane;
 pub mod overlay;
+pub mod render;
 pub mod status_bar;
 pub mod text;
 pub mod theme;
@@ -19,7 +20,7 @@ use theme::Theme;
 pub const NARROW_WIDTH: u16 = 80;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    let theme = Theme::detect();
+    let theme = Theme::new(app.cfg.palette);
     let area = frame.area();
     if area.height < 3 || area.width < 20 {
         frame.render_widget(Paragraph::new("端末が小さすぎる"), area);

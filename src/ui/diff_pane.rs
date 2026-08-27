@@ -1,14 +1,15 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use super::text::{TextOpts, render_line};
+use super::render::spans;
+use super::text::{Marks, TextOpts, render_line};
 use super::theme::Theme;
 use super::tree_pane::gutter_width;
-use crate::app::{App, ContentState, DiffView, DisplayRow};
-use crate::diff::{Cell, InlineSpans, LineTable, RowKind, RowPair};
+use crate::app::{App, ContentState, DiffView, DisplayRow, SearchState};
+use crate::diff::{Cell, InlineSpans, RowKind, RowPair};
 use crate::git::Side;
 
 /// 行末のマーカー。改行コードの差だけの変更も見えるようにする。
@@ -23,15 +24,18 @@ pub fn draw_side_by_side(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
     frame.render_widget(block, halves[0]);
     let right_area = halves[1];
 
-    let rows = build_rows(app, theme, left_area.width, right_area.width, true);
-    let Some((left, right)) = rows else { return };
+    let Some((left, right)) = build_rows(app, theme, left_area.width, right_area.width, true)
+    else {
+        return;
+    };
     frame.render_widget(Paragraph::new(left), left_area);
     frame.render_widget(Paragraph::new(right), right_area);
 }
 
 pub fn draw_unified(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
-    let rows = build_rows(app, theme, area.width, 0, false);
-    let Some((lines, _)) = rows else { return };
+    let Some((lines, _)) = build_rows(app, theme, area.width, 0, false) else {
+        return;
+    };
     frame.render_widget(Paragraph::new(lines), area);
 }
 
@@ -51,14 +55,15 @@ fn build_rows<'a>(
         return None;
     }
 
+    let search = app.search.clone();
     let ContentState::Diff(view) = &mut app.content else {
         return None;
     };
     let total = view.display_len();
     view.offset = view.offset.min(total.saturating_sub(height));
 
-    let old_width = gutter_width(view.diff.old.len(), opts);
-    let new_width = gutter_width(view.diff.new.len(), opts);
+    let old_width = gutter_width(view.diff.old.len());
+    let new_width = gutter_width(view.diff.new.len());
     let hscroll = view.hscroll;
 
     let mut left: Vec<Line> = Vec::with_capacity(height);
@@ -77,36 +82,22 @@ fn build_rows<'a>(
                 }
             }
             DisplayRow::Row(row) => {
-                let spans = view.inline_spans(row, inline_enabled);
+                let inline = view.inline_spans(row, inline_enabled);
                 let pair = view.diff.rows[row as usize];
+                let ctx = RowCtx {
+                    view,
+                    theme,
+                    opts,
+                    hscroll,
+                    inline: &inline,
+                    search: &search,
+                    row,
+                };
                 if side_by_side {
-                    left.push(side_line(
-                        view,
-                        pair,
-                        Side::Old,
-                        &spans,
-                        old_width,
-                        left_width,
-                        hscroll,
-                        opts,
-                        theme,
-                    ));
-                    right.push(side_line(
-                        view,
-                        pair,
-                        Side::New,
-                        &spans,
-                        new_width,
-                        right_width,
-                        hscroll,
-                        opts,
-                        theme,
-                    ));
+                    left.push(side_line(&ctx, pair, Side::Old, old_width, left_width));
+                    right.push(side_line(&ctx, pair, Side::New, new_width, right_width));
                 } else {
-                    unified_lines(
-                        view, pair, &spans, old_width, new_width, left_width, hscroll, opts, theme,
-                        &mut left,
-                    );
+                    unified_lines(&ctx, pair, old_width.max(new_width), left_width, &mut left);
                 }
             }
         }
@@ -114,177 +105,92 @@ fn build_rows<'a>(
     Some((left, right))
 }
 
-#[expect(clippy::too_many_arguments)]
+struct RowCtx<'a> {
+    view: &'a DiffView,
+    theme: &'a Theme,
+    opts: TextOpts,
+    hscroll: usize,
+    inline: &'a InlineSpans,
+    search: &'a SearchState,
+    row: u32,
+}
+
 fn side_line<'a>(
-    view: &DiffView,
+    ctx: &RowCtx<'_>,
     pair: RowPair,
     side: Side,
-    spans: &InlineSpans,
     num_width: usize,
     width: u16,
-    hscroll: usize,
-    opts: TextOpts,
-    theme: &Theme,
 ) -> Line<'a> {
-    let (cell, table, highlights, marker, bg, inline_bg) = match side {
+    let theme = ctx.theme;
+    let right = side == Side::New;
+    let (cell, table, highlight, inline_ranges, marker, bg, fg, inline_bg, gutter) = match side {
         Side::Old => (
             pair.left,
-            &view.diff.old,
-            &spans.old,
+            &ctx.view.diff.old,
+            ctx.view.old_highlight.as_ref(),
+            &ctx.inline.old,
             match pair.kind {
                 RowKind::Removed | RowKind::Changed => '-',
                 _ => ' ',
             },
             theme.removed_bg,
+            theme.removed_fg,
             theme.removed_inline_bg,
+            theme.gutter_removed,
         ),
         Side::New => (
             pair.right,
-            &view.diff.new,
-            &spans.new,
+            &ctx.view.diff.new,
+            ctx.view.new_highlight.as_ref(),
+            &ctx.inline.new,
             match pair.kind {
                 RowKind::Added | RowKind::Changed => '+',
                 _ => ' ',
             },
             theme.added_bg,
+            theme.added_fg,
             theme.added_inline_bg,
+            theme.gutter_added,
         ),
     };
 
     let width = width as usize;
     let content_width = width.saturating_sub(num_width + 2);
-    match cell {
-        Cell::Pad => Line::from(vec![Span::styled(
+    let Cell::Line(index) = cell else {
+        return Line::from(Span::styled(
             " ".repeat(width),
             Style::new().bg(theme.pad_bg),
-        )]),
-        Cell::Line(index) => {
-            let row_bg = if pair.kind == RowKind::Context {
-                None
-            } else {
-                Some(bg)
-            };
-            let base = row_bg.map_or(Style::new(), |c| Style::new().bg(c));
-            let mut out = vec![
-                Span::styled(
-                    format!("{:>num_width$}", index + 1),
-                    theme.gutter.patch(base),
-                ),
-                Span::styled(marker.to_string(), base),
-                Span::raw(" "),
-            ];
-            out.extend(content_spans(
-                table,
-                index,
-                highlights,
-                opts,
-                hscroll,
-                content_width,
-                base,
-                Style::new().bg(inline_bg),
-                theme,
-            ));
-            Line::from(out)
-        }
-    }
-}
+        ));
+    };
 
-#[expect(clippy::too_many_arguments)]
-fn unified_lines<'a>(
-    view: &DiffView,
-    pair: RowPair,
-    spans: &InlineSpans,
-    old_width: usize,
-    new_width: usize,
-    width: u16,
-    hscroll: usize,
-    opts: TextOpts,
-    theme: &Theme,
-    out: &mut Vec<Line<'a>>,
-) {
-    let num_width = old_width.max(new_width);
-    match pair.kind {
-        RowKind::Context => out.push(side_line(
-            view,
-            pair,
-            Side::Old,
-            spans,
-            num_width,
-            width,
-            hscroll,
-            opts,
-            theme,
-        )),
-        RowKind::Removed => out.push(side_line(
-            view,
-            pair,
-            Side::Old,
-            spans,
-            num_width,
-            width,
-            hscroll,
-            opts,
-            theme,
-        )),
-        RowKind::Added => out.push(side_line(
-            view,
-            pair,
-            Side::New,
-            spans,
-            num_width,
-            width,
-            hscroll,
-            opts,
-            theme,
-        )),
-        RowKind::Changed => {
-            out.push(side_line(
-                view,
-                pair,
-                Side::Old,
-                spans,
-                num_width,
-                width,
-                hscroll,
-                opts,
-                theme,
-            ));
-            out.push(side_line(
-                view,
-                pair,
-                Side::New,
-                spans,
-                num_width,
-                width,
-                hscroll,
-                opts,
-                theme,
-            ));
-        }
-    }
-}
+    let changed = pair.kind != RowKind::Context;
+    let base = if changed {
+        Style::new().bg(bg).fg(fg)
+    } else {
+        Style::new()
+    };
+    let gutter_style = if changed { gutter.bg(bg) } else { theme.gutter };
 
-#[expect(clippy::too_many_arguments)]
-fn content_spans<'a>(
-    table: &LineTable,
-    index: u32,
-    highlights: &[std::ops::Range<usize>],
-    opts: TextOpts,
-    hscroll: usize,
-    content_width: usize,
-    base: Style,
-    inline: Style,
-    theme: &Theme,
-) -> Vec<Span<'a>> {
     let raw = table.line_display(index);
     let text = String::from_utf8_lossy(raw);
-    let mut out: Vec<Span> = render_line(&text, highlights, opts, hscroll, content_width)
-        .into_iter()
-        .map(|(t, hi)| {
-            let style = if hi { base.patch(inline) } else { base };
-            Span::styled(t, style)
-        })
-        .collect();
+    let marks = Marks {
+        inline: inline_ranges,
+        search: ctx.search.ranges(ctx.row, right),
+        colors: highlight.map_or(&[][..], |h| h.line(index)),
+    };
+    let segments = render_line(&text, marks, ctx.opts, ctx.hscroll, content_width);
+
+    let mut out = vec![
+        Span::styled(format!("{:>num_width$}", index + 1), gutter_style),
+        Span::styled(marker.to_string(), gutter_style),
+        Span::styled(" ", base),
+    ];
+    let used: usize = segments
+        .iter()
+        .map(|s| super::text::display_width(&s.text, ctx.opts))
+        .sum();
+    out.extend(spans(segments, base, inline_bg, theme));
 
     let mut suffix = String::new();
     if table.has_cr(index) {
@@ -293,18 +199,35 @@ fn content_spans<'a>(
     if table.is_last_without_newline(index) {
         suffix.push_str(NO_NEWLINE_MARK);
     }
+    let suffix_width = suffix.chars().count();
     if !suffix.is_empty() {
         out.push(Span::styled(suffix, theme.dim.patch(base)));
     }
-    if base.bg.is_some_and(|c| c != Color::Reset) {
-        // 行全体を着色し、変更行の範囲を目で追えるようにする
-        let used: usize = out
-            .iter()
-            .map(|s| super::text::display_width(&s.content, opts))
-            .sum();
-        if used < content_width {
-            out.push(Span::styled(" ".repeat(content_width - used), base));
+    // 変更行は行末まで着色し、範囲を目で追えるようにする
+    if changed {
+        let filled = used + suffix_width;
+        if filled < content_width {
+            out.push(Span::styled(" ".repeat(content_width - filled), base));
         }
     }
-    out
+    Line::from(out)
+}
+
+fn unified_lines<'a>(
+    ctx: &RowCtx<'_>,
+    pair: RowPair,
+    num_width: usize,
+    width: u16,
+    out: &mut Vec<Line<'a>>,
+) {
+    match pair.kind {
+        RowKind::Context | RowKind::Removed => {
+            out.push(side_line(ctx, pair, Side::Old, num_width, width));
+        }
+        RowKind::Added => out.push(side_line(ctx, pair, Side::New, num_width, width)),
+        RowKind::Changed => {
+            out.push(side_line(ctx, pair, Side::Old, num_width, width));
+            out.push(side_line(ctx, pair, Side::New, num_width, width));
+        }
+    }
 }

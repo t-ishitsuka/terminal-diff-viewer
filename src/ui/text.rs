@@ -41,6 +41,46 @@ fn is_control(c: char) -> bool {
     (c as u32) < 0x20 || c as u32 == 0x7f
 }
 
+/// 端末非依存の色表現。ratatui / syntect の型を ui/text.rs へ持ち込まないために使う。
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Rgb {
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+}
+
+/// 1 行に重ねる装飾。いずれもバイト範囲で、開始位置の昇順に並んでいること。
+#[derive(Copy, Clone, Default)]
+pub struct Marks<'a> {
+    /// 語単位差分の強調範囲。
+    pub inline: &'a [Range<usize>],
+    /// 検索一致の範囲。
+    pub search: &'a [Range<usize>],
+    /// シンタックスハイライトの前景色。
+    pub colors: &'a [(Range<usize>, Rgb)],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Segment {
+    pub text: String,
+    pub inline: bool,
+    pub search: bool,
+    pub color: Option<Rgb>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+struct Attrs {
+    inline: bool,
+    search: bool,
+    color: Option<Rgb>,
+}
+
 pub fn display_width(s: &str, opts: TextOpts) -> usize {
     let mut col = 0;
     for c in s.chars() {
@@ -49,27 +89,64 @@ pub fn display_width(s: &str, opts: TextOpts) -> usize {
     col
 }
 
+/// 範囲の並びに対して、走査位置を進めながら該当判定を行う補助。
+struct RangeCursor<'a, T> {
+    items: &'a [T],
+    index: usize,
+}
+
+impl<'a, T> RangeCursor<'a, T> {
+    fn new(items: &'a [T]) -> Self {
+        Self { items, index: 0 }
+    }
+
+    fn find(&mut self, byte: usize, range_of: impl Fn(&T) -> Range<usize>) -> Option<&'a T> {
+        while self.index < self.items.len() && range_of(&self.items[self.index]).end <= byte {
+            self.index += 1;
+        }
+        let item = self.items.get(self.index)?;
+        let range = range_of(item);
+        (range.start <= byte && byte < range.end).then_some(item)
+    }
+}
+
 /// 1 行を表示セグメント列へ変換する。
-/// タブ展開・制御文字の可視化・水平スクロール・強調範囲の適用をまとめて行う。
-/// 戻り値は (テキスト, 強調フラグ) の並びで、合計幅は `max_cols` 以下。
+/// タブ展開・制御文字の可視化・水平スクロール・装飾の適用をまとめて行う。
+/// 戻り値の合計表示幅は `max_cols` 以下。
 pub fn render_line(
     line: &str,
-    highlights: &[Range<usize>],
+    marks: Marks<'_>,
     opts: TextOpts,
     skip_cols: usize,
     max_cols: usize,
-) -> Vec<(String, bool)> {
-    let mut out: Vec<(String, bool)> = Vec::new();
+) -> Vec<Segment> {
+    let mut out: Vec<Segment> = Vec::new();
     if max_cols == 0 {
         return out;
     }
     let end_col = skip_cols + max_cols;
     let mut col = 0usize;
-    let mut hi_index = 0usize;
+    let mut inline = RangeCursor::new(marks.inline);
+    let mut search = RangeCursor::new(marks.search);
+    let mut colors = RangeCursor::new(marks.colors);
 
-    let push = |out: &mut Vec<(String, bool)>, text: &str, hi: bool| match out.last_mut() {
-        Some((buf, last_hi)) if *last_hi == hi => buf.push_str(text),
-        _ => out.push((text.to_string(), hi)),
+    let push = |out: &mut Vec<Segment>, text: &str, attrs: Attrs| {
+        let matches_last = out.last().is_some_and(|s| {
+            s.inline == attrs.inline && s.search == attrs.search && s.color == attrs.color
+        });
+        if matches_last {
+            out.last_mut()
+                .expect("直前のセグメント")
+                .text
+                .push_str(text);
+        } else {
+            out.push(Segment {
+                text: text.to_string(),
+                inline: attrs.inline,
+                search: attrs.search,
+                color: attrs.color,
+            });
+        }
     };
 
     for (byte, c) in line.char_indices() {
@@ -83,23 +160,22 @@ pub fn render_line(
             continue;
         }
 
-        while hi_index < highlights.len() && highlights[hi_index].end <= byte {
-            hi_index += 1;
-        }
-        let hi = highlights
-            .get(hi_index)
-            .is_some_and(|r| r.start <= byte && byte < r.end);
+        let attrs = Attrs {
+            inline: inline.find(byte, Clone::clone).is_some(),
+            search: search.find(byte, Clone::clone).is_some(),
+            color: colors.find(byte, |(r, _)| r.clone()).map(|(_, c)| *c),
+        };
 
         // 境界にまたがる文字は空白で埋め、桁が崩れないようにする
         let visible_start = col.max(skip_cols);
         let visible_end = next.min(end_col);
         let visible = visible_end - visible_start;
         if c == '\t' || col < skip_cols || next > end_col {
-            push(&mut out, &" ".repeat(visible), hi);
+            push(&mut out, &" ".repeat(visible), attrs);
         } else if is_control(c) {
-            push(&mut out, "·", hi);
+            push(&mut out, "·", attrs);
         } else {
-            push(&mut out, &c.to_string(), hi);
+            push(&mut out, &c.to_string(), attrs);
         }
         col = next;
     }
@@ -148,8 +224,12 @@ mod tests {
         TextOpts::default()
     }
 
-    fn joined(segs: &[(String, bool)]) -> String {
-        segs.iter().map(|(t, _)| t.as_str()).collect()
+    fn joined(segs: &[Segment]) -> String {
+        segs.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    fn plain(line: &str, skip: usize, width: usize) -> Vec<Segment> {
+        render_line(line, Marks::default(), opts(), skip, width)
     }
 
     #[test]
@@ -168,33 +248,66 @@ mod tests {
 
     #[test]
     fn render_clips_to_the_window() {
-        let segs = render_line("abcdefgh", &[], opts(), 2, 3);
-        assert_eq!(joined(&segs), "cde");
+        assert_eq!(joined(&plain("abcdefgh", 2, 3)), "cde");
     }
 
     #[test]
     fn render_pads_when_wide_char_straddles_boundary() {
         // 全角 1 文字が右端をまたぐ場合は空白 1 桁になる
-        let segs = render_line("あい", &[], opts(), 0, 3);
-        assert_eq!(joined(&segs), "あ ");
+        assert_eq!(joined(&plain("あい", 0, 3)), "あ ");
     }
 
     #[test]
     #[expect(clippy::single_range_in_vec_init)]
-    fn render_marks_highlight_ranges() {
-        let segs = render_line("let x = 1;", &[8..9], opts(), 0, 20);
-        let hi: Vec<&str> = segs
+    fn render_marks_inline_ranges() {
+        let inline = [8..9];
+        let marks = Marks {
+            inline: &inline,
+            ..Marks::default()
+        };
+        let segs = render_line("let x = 1;", marks, opts(), 0, 20);
+        let hit: Vec<&str> = segs
             .iter()
-            .filter(|(_, h)| *h)
-            .map(|(t, _)| t.as_str())
+            .filter(|s| s.inline)
+            .map(|s| s.text.as_str())
             .collect();
-        assert_eq!(hi, vec!["1"]);
+        assert_eq!(hit, vec!["1"]);
+    }
+
+    #[test]
+    fn render_applies_syntax_colors() {
+        let red = Rgb::new(255, 0, 0);
+        let colors = [(0..3, red)];
+        let marks = Marks {
+            colors: &colors,
+            ..Marks::default()
+        };
+        let segs = render_line("let x", marks, opts(), 0, 20);
+        assert_eq!(segs[0].text, "let");
+        assert_eq!(segs[0].color, Some(red));
+        assert_eq!(segs[1].color, None);
+    }
+
+    #[test]
+    #[expect(clippy::single_range_in_vec_init)]
+    fn render_separates_search_matches() {
+        let search = [4..7];
+        let marks = Marks {
+            search: &search,
+            ..Marks::default()
+        };
+        let segs = render_line("let foo = 1;", marks, opts(), 0, 20);
+        let hit: Vec<&str> = segs
+            .iter()
+            .filter(|s| s.search)
+            .map(|s| s.text.as_str())
+            .collect();
+        assert_eq!(hit, vec!["foo"]);
     }
 
     #[test]
     fn render_visualizes_control_chars() {
-        let segs = render_line("a\u{7}b", &[], opts(), 0, 10);
-        assert_eq!(joined(&segs), "a·b");
+        assert_eq!(joined(&plain("a\u{7}b", 0, 10)), "a·b");
     }
 
     #[test]

@@ -5,7 +5,7 @@ use ratatui::widgets::Paragraph;
 
 use super::text::fit_width;
 use super::theme::Theme;
-use crate::app::{App, ContentState, Mode};
+use crate::app::{App, ContentState, InputKind, Mode, Overlay};
 
 pub fn draw_header(
     frame: &mut Frame,
@@ -51,8 +51,27 @@ pub fn draw_header(
 }
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
+    let width = area.width as usize;
+    let opts = app.cfg.text;
+
+    // 入力中はプロンプトを最優先で出す
+    if let Overlay::Input { kind, buffer } = &app.overlay {
+        let prefix = match kind {
+            InputKind::Search => "/",
+            InputKind::Filter => "絞り込み: ",
+        };
+        let hits = if *kind == InputKind::Search && app.search.is_active() {
+            format!("  ({} 件)", app.search.hits.len())
+        } else {
+            String::new()
+        };
+        let text = fit_width(&format!("{prefix}{buffer}▏{hits}"), width, opts);
+        frame.render_widget(Paragraph::new(Line::styled(text, theme.notice)), area);
+        return;
+    }
+
     if let Some(notice) = app.notice.clone() {
-        let text = fit_width(&notice, area.width as usize, app.cfg.text);
+        let text = fit_width(&notice, width, opts);
         frame.render_widget(Paragraph::new(Line::styled(text, theme.notice)), area);
         return;
     }
@@ -77,15 +96,26 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         _ => String::new(),
     };
 
+    let search = if app.search.is_active() {
+        format!(
+            "  /{} {}/{}",
+            app.search.query,
+            (app.search.current + 1).min(app.search.hits.len().max(1)),
+            app.search.hits.len()
+        )
+    } else {
+        String::new()
+    };
+
     let hints = match app.mode {
-        Mode::Tree => "[Tab] ペイン  [m] diff  [r] 再読込  [?] ヘルプ",
-        Mode::Diff => "[]c] 次の変更  [z] 折畳  [u] 統合表示  [?] ヘルプ",
+        Mode::Tree => "[Tab] ペイン  [m] diff  [/] 絞込  [?] ヘルプ",
+        Mode::Diff => "[]c] 次の変更  [/] 検索  [z] 折畳  [?] ヘルプ",
     };
 
     let text = fit_width(
-        &format!("{branch} ● {changed} 件変更{scanning}   {position}   {hints}"),
-        area.width as usize,
-        app.cfg.text,
+        &format!("{branch} ● {changed} 件変更{scanning}   {position}{search}   {hints}"),
+        width,
+        opts,
     );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(text, theme.status))),

@@ -1,7 +1,10 @@
+use std::ops::Range;
 use std::path::PathBuf;
 
 use super::action::Action;
-use super::state::{App, ContentState, DiffView, DisplayRow, Focus, Mode, Overlay, TextView};
+use super::state::{
+    App, ContentState, DiffView, DisplayRow, Focus, InputKind, Mode, Overlay, TextView,
+};
 use crate::task::{Content, TaskResult, TextOutcome};
 use crate::vfs::{Node, TreeModel};
 
@@ -12,6 +15,7 @@ pub fn apply(app: &mut App, action: Action) {
         Action::Escape => {
             app.overlay = Overlay::None;
             app.notice = None;
+            app.search.clear();
         }
         Action::ToggleHelp => {
             app.overlay = if app.overlay == Overlay::Help {
@@ -61,12 +65,11 @@ pub fn apply(app: &mut App, action: Action) {
         Action::TreeOpen => tree_open(app),
         Action::TreeCollapse => tree_collapse(app),
         Action::TreeToggle => {
-            if let Some(id) = app.tree().selected_id() {
-                let is_dir = app.tree().node(id).is_dir;
-                if is_dir {
-                    app.tree().toggle(id);
-                    load_children_if_needed(app, id);
-                }
+            if let Some(id) = app.tree().selected_id()
+                && app.tree().node(id).is_dir
+            {
+                app.tree().toggle(id);
+                load_children_if_needed(app, id);
             }
         }
         Action::ToggleIgnored => {
@@ -102,6 +105,52 @@ pub fn apply(app: &mut App, action: Action) {
         Action::PrevFile => step_change_file(app, -1),
         Action::ToggleFold => toggle_fold(app),
         Action::ExpandGap => expand_gap(app),
+
+        Action::StartSearch => {
+            app.overlay = Overlay::Input {
+                kind: InputKind::Search,
+                buffer: app.search.query.clone(),
+            };
+        }
+        Action::StartFilter => {
+            app.overlay = Overlay::Input {
+                kind: InputKind::Filter,
+                buffer: app.tree().filter().unwrap_or_default().to_string(),
+            };
+        }
+        Action::InputChar(c) => edit_input(app, |buffer| buffer.push(c)),
+        Action::InputBackspace => edit_input(app, |buffer| {
+            buffer.pop();
+        }),
+        Action::InputSubmit => {
+            if let Overlay::Input { kind, .. } = app.overlay.clone() {
+                app.overlay = Overlay::None;
+                if kind == InputKind::Search {
+                    if app.search.hits.is_empty() {
+                        app.notice = Some(format!("一致なし: {}", app.search.query));
+                    } else {
+                        app.focus = Focus::Content;
+                        scroll_to_match(app);
+                    }
+                } else {
+                    app.focus = Focus::Tree;
+                }
+            }
+        }
+        Action::InputCancel => {
+            if let Overlay::Input { kind, .. } = app.overlay.clone() {
+                app.overlay = Overlay::None;
+                match kind {
+                    InputKind::Search => app.search.clear(),
+                    InputKind::Filter => {
+                        app.tree().set_filter(None);
+                        app.request_content();
+                    }
+                }
+            }
+        }
+        Action::NextMatch => step_match(app, 1),
+        Action::PrevMatch => step_match(app, -1),
     }
 }
 
@@ -137,7 +186,9 @@ fn reload(app: &mut App) {
 fn reload_fs_tree(app: &mut App) {
     app.pending_expand = app.fs_tree.expanded_dir_paths().into_iter().collect();
     app.pending_select = app.fs_tree.selected_node().map(|n| n.path.clone());
+    let filter = app.fs_tree.filter().map(str::to_string);
     app.fs_tree.clear();
+    app.fs_tree.set_filter(filter);
     app.request_root_dir();
 }
 
@@ -233,8 +284,7 @@ fn jump_hunk(app: &mut App, forward: bool) {
     };
     // 変更ブロックの先頭が画面上部から 1/4 の位置に来るようにする
     let index = view.display_index_of_row(row as u32);
-    let offset = index.saturating_sub(height / 4);
-    view.offset = offset;
+    view.offset = index.saturating_sub(height / 4);
     let max = view.display_len().saturating_sub(height);
     view.offset = view.offset.min(max);
 }
@@ -283,6 +333,121 @@ fn expand_gap(app: &mut App) {
     }
 }
 
+fn edit_input(app: &mut App, edit: impl FnOnce(&mut String)) {
+    let Overlay::Input { kind, mut buffer } = app.overlay.clone() else {
+        return;
+    };
+    edit(&mut buffer);
+    app.overlay = Overlay::Input {
+        kind,
+        buffer: buffer.clone(),
+    };
+    // 入力しながら結果が変わる方が目的の行を探しやすい
+    match kind {
+        InputKind::Search => run_search(app, &buffer),
+        InputKind::Filter => {
+            app.tree().set_filter(Some(buffer));
+            app.tree().select_first();
+            app.request_content();
+        }
+    }
+}
+
+/// 大文字を含まない検索語は大文字小文字を区別しない (smart case)。
+fn find_matches(haystack: &[u8], needle: &[u8], insensitive: bool) -> Vec<Range<usize>> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return Vec::new();
+    }
+    let eq = |a: u8, b: u8| {
+        if insensitive {
+            a.eq_ignore_ascii_case(&b)
+        } else {
+            a == b
+        }
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + needle.len() <= haystack.len() {
+        if haystack[i..]
+            .iter()
+            .zip(needle)
+            .take(needle.len())
+            .all(|(a, b)| eq(*a, *b))
+        {
+            out.push(i..i + needle.len());
+            i += needle.len();
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+pub fn run_search(app: &mut App, query: &str) {
+    if query.is_empty() {
+        app.search.clear();
+        return;
+    }
+    let needle = query.as_bytes();
+    let insensitive = !query.bytes().any(|b| b.is_ascii_uppercase());
+    let mut matches: Vec<(u32, bool, Range<usize>)> = Vec::new();
+
+    match &app.content {
+        ContentState::Text(view) => {
+            for index in 0..view.table.len() as u32 {
+                for range in find_matches(view.table.line_display(index), needle, insensitive) {
+                    matches.push((index, false, range));
+                }
+            }
+        }
+        ContentState::Diff(view) => {
+            for (row, pair) in view.diff.rows.iter().enumerate() {
+                if let Some(index) = pair.left.line() {
+                    for range in
+                        find_matches(view.diff.old.line_display(index), needle, insensitive)
+                    {
+                        matches.push((row as u32, false, range));
+                    }
+                }
+                if let Some(index) = pair.right.line() {
+                    for range in
+                        find_matches(view.diff.new.line_display(index), needle, insensitive)
+                    {
+                        matches.push((row as u32, true, range));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    app.search.set(query.to_string(), matches);
+}
+
+fn step_match(app: &mut App, delta: isize) {
+    if app.search.hits.is_empty() {
+        if app.search.is_active() {
+            app.notice = Some(format!("一致なし: {}", app.search.query));
+        }
+        return;
+    }
+    let len = app.search.hits.len() as isize;
+    let next = (app.search.current as isize + delta).rem_euclid(len);
+    app.search.current = next as usize;
+    scroll_to_match(app);
+}
+
+fn scroll_to_match(app: &mut App) {
+    let Some((row, _)) = app.search.hits.get(app.search.current).copied() else {
+        return;
+    };
+    let height = app.content_height.max(1);
+    let target = match &app.content {
+        ContentState::Diff(view) => view.display_index_of_row(row),
+        _ => row as usize,
+    };
+    set_offset(app, target.saturating_sub(height / 4));
+}
+
 pub fn on_task(app: &mut App, result: TaskResult) {
     match result {
         TaskResult::Status {
@@ -316,10 +481,9 @@ pub fn on_task(app: &mut App, result: TaskResult) {
             let _ = generation;
             match outcome {
                 Ok(entries) => {
-                    if app.fs_tree.node_count() <= node as usize {
-                        return;
-                    }
-                    if app.fs_tree.children_count(node) > 0 {
+                    if app.fs_tree.node_count() <= node as usize
+                        || app.fs_tree.children_count(node) > 0
+                    {
                         return;
                     }
                     let parent_path = app.fs_tree.node(node).path.clone();
@@ -372,15 +536,19 @@ pub fn on_task(app: &mut App, result: TaskResult) {
                 return;
             }
             app.content = match outcome {
-                Ok(TextOutcome::Ready(table)) => ContentState::Text(TextView {
-                    path,
-                    table,
-                    offset: 0,
-                    hscroll: 0,
-                }),
+                Ok(TextOutcome::Ready { table, highlight }) => {
+                    ContentState::Text(Box::new(TextView {
+                        path,
+                        table,
+                        highlight,
+                        offset: 0,
+                        hscroll: 0,
+                    }))
+                }
                 Ok(TextOutcome::Unsupported(reason)) => ContentState::Unsupported { path, reason },
                 Err(error) => ContentState::Failed { path, error },
             };
+            reapply_search(app);
         }
 
         TaskResult::Diff {
@@ -393,16 +561,31 @@ pub fn on_task(app: &mut App, result: TaskResult) {
             }
             let path = change.path.clone();
             app.content = match outcome {
-                Ok(Content::Ready(diff)) => ContentState::Diff(Box::new(DiffView::new(
-                    change,
+                Ok(Content::Ready {
                     diff,
+                    old_highlight,
+                    new_highlight,
+                }) => ContentState::Diff(Box::new(DiffView::new(
+                    change,
+                    *diff,
+                    old_highlight,
+                    new_highlight,
                     !app.cfg.full_file,
                     app.cfg.fold_context,
                 ))),
                 Ok(Content::Unsupported(reason)) => ContentState::Unsupported { path, reason },
                 Err(error) => ContentState::Failed { path, error },
             };
+            reapply_search(app);
         }
+    }
+}
+
+/// 別のファイルを開いても検索語は保つ。行番号は変わるので引き直す。
+fn reapply_search(app: &mut App) {
+    if app.search.is_active() {
+        let query = app.search.query.clone();
+        run_search(app, &query);
     }
 }
 

@@ -4,7 +4,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use super::text::{TextOpts, fit_width, pad_to};
+use super::text::{fit_width, pad_to};
 use super::theme::Theme;
 use crate::app::{App, Focus};
 
@@ -21,6 +21,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     tree.scroll_into_view(height);
     let offset = tree.offset();
     let selected = tree.selected_index();
+    let filtered = tree.filter().is_some();
     let ids: Vec<u32> = tree
         .visible()
         .iter()
@@ -30,10 +31,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         .collect();
 
     if ids.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::styled("(表示するものがない)", theme.dim)),
-            area,
-        );
+        let message = if filtered {
+            "絞り込みに一致するものがない"
+        } else {
+            "(表示するものがない)"
+        };
+        frame.render_widget(Paragraph::new(Line::styled(message, theme.dim)), area);
         return;
     }
 
@@ -50,9 +53,10 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         let label = pad_to(&label, width.saturating_sub(2), opts);
 
         let marker = node.status.map_or(' ', |k| k.marker());
-        let marker_style = node
+        // 記号だけでなく名前も状態の色で示す
+        let entry_style = node
             .status
-            .map_or(theme.dim, |kind| theme.change_style(kind));
+            .map_or(Style::new(), |kind| theme.change_style(kind));
 
         let row_style = if offset + row == selected {
             if focused {
@@ -66,9 +70,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
 
         lines.push(
             Line::from(vec![
-                Span::styled(marker.to_string(), marker_style),
+                Span::styled(marker.to_string(), entry_style),
                 Span::raw(" "),
-                Span::raw(label),
+                Span::styled(label, entry_style),
             ])
             .style(row_style),
         );
@@ -77,9 +81,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// 行番号などの桁揃えに使う、内容ペインと共通のガター幅計算。
-pub fn gutter_width(total_lines: usize, opts: TextOpts) -> usize {
-    let _ = opts;
-    let digits = total_lines.max(1).to_string().len();
-    digits.max(3)
+/// 行番号欄の桁数。スクロールで幅が揺れないよう総行数から決める。
+pub fn gutter_width(total_lines: usize) -> usize {
+    total_lines.max(1).to_string().len().max(3)
 }

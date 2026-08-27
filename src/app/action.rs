@@ -36,6 +36,15 @@ pub enum Action {
     PrevFile,
     ToggleFold,
     ExpandGap,
+
+    StartSearch,
+    StartFilter,
+    InputChar(char),
+    InputBackspace,
+    InputSubmit,
+    InputCancel,
+    NextMatch,
+    PrevMatch,
 }
 
 /// `]c` のような 2 打鍵を扱うため、直前の前置キーを保持する。
@@ -45,11 +54,25 @@ pub struct KeyMap {
 }
 
 impl KeyMap {
-    pub fn map(&mut self, key: KeyEvent, focus: Focus, overlay: Overlay) -> Action {
+    pub fn map(&mut self, key: KeyEvent, focus: Focus, overlay: &Overlay) -> Action {
         if key.kind == KeyEventKind::Release {
             return Action::None;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if ctrl && matches!(key.code, KeyCode::Char('c')) {
+            return Action::Quit;
+        }
+
+        if overlay.is_input() {
+            self.pending = None;
+            return match key.code {
+                KeyCode::Esc => Action::InputCancel,
+                KeyCode::Enter => Action::InputSubmit,
+                KeyCode::Backspace => Action::InputBackspace,
+                KeyCode::Char(c) if !ctrl => Action::InputChar(c),
+                _ => Action::None,
+            };
+        }
 
         if let Some(prefix) = self.pending.take()
             && let KeyCode::Char(c) = key.code
@@ -63,10 +86,7 @@ impl KeyMap {
             };
         }
 
-        if ctrl && matches!(key.code, KeyCode::Char('c')) {
-            return Action::Quit;
-        }
-        if overlay != Overlay::None {
+        if *overlay != Overlay::None {
             return match key.code {
                 KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('?') => Action::Escape,
                 _ => Action::None,
@@ -93,12 +113,12 @@ impl KeyMap {
         }
 
         match focus {
-            Focus::Tree => self.map_tree(key, ctrl),
-            Focus::Content => self.map_content(key, ctrl),
+            Focus::Tree => Self::map_tree(key, ctrl),
+            Focus::Content => Self::map_content(key, ctrl),
         }
     }
 
-    fn map_tree(&mut self, key: KeyEvent, ctrl: bool) -> Action {
+    fn map_tree(key: KeyEvent, ctrl: bool) -> Action {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => Action::TreeMove(1),
             KeyCode::Char('k') | KeyCode::Up => Action::TreeMove(-1),
@@ -113,11 +133,12 @@ impl KeyMap {
             KeyCode::Char('z') => Action::TreeToggle,
             KeyCode::Char('I') => Action::ToggleIgnored,
             KeyCode::Char('T') => Action::ToggleHierarchy,
+            KeyCode::Char('f') | KeyCode::Char('/') => Action::StartFilter,
             _ => Action::None,
         }
     }
 
-    fn map_content(&mut self, key: KeyEvent, ctrl: bool) -> Action {
+    fn map_content(key: KeyEvent, ctrl: bool) -> Action {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => Action::ContentScroll(1),
             KeyCode::Char('k') | KeyCode::Up => Action::ContentScroll(-1),
@@ -133,6 +154,9 @@ impl KeyMap {
             KeyCode::Char('l') | KeyCode::Right => Action::ContentHScroll(4),
             KeyCode::Char('z') => Action::ToggleFold,
             KeyCode::Enter => Action::ExpandGap,
+            KeyCode::Char('/') => Action::StartSearch,
+            KeyCode::Char('n') => Action::NextMatch,
+            KeyCode::Char('N') => Action::PrevMatch,
             _ => Action::None,
         }
     }

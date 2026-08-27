@@ -2,11 +2,13 @@ pub mod message;
 
 pub use message::*;
 
+use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use crate::diff::{LineTable, align};
-use crate::git::{DiffSpec, GitBackend, Loaded, Side};
+use crate::git::{DiffSpec, FileChange, GitBackend, Loaded, Side};
+use crate::highlight::{Highlighted, highlight};
 
 pub struct WorkerCtx {
     pub backend: Option<Arc<dyn GitBackend>>,
@@ -72,13 +74,18 @@ fn handle(ctx: &WorkerCtx, request: TaskRequest) -> TaskResult {
             generation,
             path,
             abs,
+            highlight,
         } => TaskResult::Text {
             generation,
+            outcome: load_text(ctx, &path, &abs, &highlight).map_err(|e| format!("{e:#}")),
             path,
-            outcome: load_text(ctx, &abs).map_err(|e| format!("{e:#}")),
         },
-        TaskRequest::ComputeDiff { generation, change } => {
-            let outcome = compute_diff(ctx, &change).map_err(|e| format!("{e:#}"));
+        TaskRequest::ComputeDiff {
+            generation,
+            change,
+            highlight,
+        } => {
+            let outcome = compute_diff(ctx, &change, &highlight).map_err(|e| format!("{e:#}"));
             TaskResult::Diff {
                 generation,
                 change,
@@ -99,15 +106,37 @@ fn scan_status(ctx: &WorkerCtx) -> anyhow::Result<StatusOutcome> {
     })
 }
 
-fn load_text(ctx: &WorkerCtx, abs: &std::path::Path) -> anyhow::Result<TextOutcome> {
+fn colorize(
+    table: &LineTable,
+    path: &Path,
+    options: &HighlightOptions,
+) -> Option<Arc<Highlighted>> {
+    let (theme, max_lines) = options.as_ref()?;
+    highlight(table, path, theme, *max_lines)
+}
+
+fn load_text(
+    ctx: &WorkerCtx,
+    rela_path: &Path,
+    abs: &Path,
+    options: &HighlightOptions,
+) -> anyhow::Result<TextOutcome> {
     let loaded = crate::git::gix_backend::read_worktree_file(abs, ctx.max_file_bytes)?;
     Ok(match loaded {
-        Loaded::Text(bytes) => TextOutcome::Ready(LineTable::new(bytes)),
+        Loaded::Text(bytes) => {
+            let table = LineTable::new(bytes);
+            let highlight = colorize(&table, rela_path, options);
+            TextOutcome::Ready { table, highlight }
+        }
         Loaded::Unsupported(reason) => TextOutcome::Unsupported(reason),
     })
 }
 
-fn compute_diff(ctx: &WorkerCtx, change: &crate::git::FileChange) -> anyhow::Result<Content> {
+fn compute_diff(
+    ctx: &WorkerCtx,
+    change: &FileChange,
+    options: &HighlightOptions,
+) -> anyhow::Result<Content> {
     let backend = ctx
         .backend
         .as_ref()
@@ -118,10 +147,14 @@ fn compute_diff(ctx: &WorkerCtx, change: &crate::git::FileChange) -> anyhow::Res
         (Loaded::Unsupported(reason), _) | (_, Loaded::Unsupported(reason)) => {
             return Ok(Content::Unsupported(reason));
         }
-        (Loaded::Text(o), Loaded::Text(n)) => (o, n),
+        (Loaded::Text(o), Loaded::Text(n)) => (LineTable::new(o), LineTable::new(n)),
     };
-    Ok(Content::Ready(align(
-        LineTable::new(old),
-        LineTable::new(new),
-    )))
+
+    let old_highlight = colorize(&old, change.old_lookup_path(), options);
+    let new_highlight = colorize(&new, &change.path, options);
+    Ok(Content::Ready {
+        diff: Box::new(align(old, new)),
+        old_highlight,
+        new_highlight,
+    })
 }

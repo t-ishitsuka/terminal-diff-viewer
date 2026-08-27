@@ -22,14 +22,20 @@ fn main() -> Result<()> {
         .canonicalize()
         .with_context(|| format!("{} を解決できない", start.display()))?;
 
-    let mut cfg = Config::default();
+    // 設定ファイル → CLI 引数 の順に上書きする
+    let mut cfg = Config::load(cli.config.as_deref())?;
     if let Some(v) = cli.max_file_bytes {
         cfg.max_file_bytes = v;
     }
     if let Some(v) = cli.tab_width {
         cfg.text.tab_width = v.max(1);
     }
-    cfg.text.ambiguous_wide = cli.ambiguous_wide;
+    if cli.ambiguous_wide {
+        cfg.text.ambiguous_wide = true;
+    }
+    if cli.no_highlight {
+        cfg.syntax_highlight = false;
+    }
 
     // リポジトリ外でも tree モードは動かす
     let backend: Option<Arc<dyn GitBackend>> = match GixBackend::discover(&start) {
