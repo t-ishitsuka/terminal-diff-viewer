@@ -254,7 +254,7 @@ max_file_bytes = 2097152    # これを超えると差分計算しない
 
 [theme]
 palette = "red-green"       # または "blue-orange"
-syntax = "base16-ocean.dark"
+syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定できる
 ```
 
 キーマップの上書きは未実装。必要になった時点で `[keys]` を追加する。

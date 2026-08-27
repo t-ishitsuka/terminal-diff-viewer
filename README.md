@@ -62,17 +62,17 @@ max_file_bytes = 2097152
 
 [theme]
 palette = "red-green"       # または "blue-orange" (赤緑の識別が難しい場合)
-syntax = "base16-ocean.dark"
+syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定できる
 ```
 
 ## 実装状況
 
 | 機能 | 状態 |
 | --- | --- |
-| tree モード (遅延展開・ignore 準拠・ステータス記号) | 実装済み |
+| tree モード (遅延展開・ignore 準拠・ステータス記号・種別で色分け) | 実装済み |
 | diff モード (作業ツリー vs HEAD、全文 side-by-side) | 実装済み |
 | 語単位ハイライト / 変更箇所ジャンプ / 折り畳み / unified 切替 | 実装済み |
-| シンタックスハイライト (syntect) | 実装済み |
+| シンタックスハイライト (同梱テーマ tdv-dark / tdv-light) | 実装済み |
 | 検索 (内容) / 絞り込み (ファイル名) | 実装済み |
 | 設定ファイル / Nix パッケージ | 実装済み |
 | バイナリ・巨大ファイル・CRLF・末尾改行欠落の扱い | 実装済み |
@@ -105,7 +105,7 @@ syntax = "base16-ocean.dark"
 ## 開発
 
 ```sh
-cargo test                 # 単体 46 + 統合 13
+cargo test                 # 単体 50 + 統合 14
 cargo clippy --all-targets
 nix build                  # サンドボックス内でテストごとビルド
 ```
