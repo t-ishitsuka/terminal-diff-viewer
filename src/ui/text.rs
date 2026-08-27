@@ -62,8 +62,16 @@ pub struct Marks<'a> {
     pub inline: &'a [Range<usize>],
     /// 検索一致の範囲。
     pub search: &'a [Range<usize>],
-    /// シンタックスハイライトの前景色。
-    pub colors: &'a [(Range<usize>, Rgb)],
+    /// シンタックスハイライトの装飾。
+    pub colors: &'a [(Range<usize>, SyntaxStyle)],
+}
+
+/// シンタックスハイライト 1 区間分の装飾。
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub struct SyntaxStyle {
+    pub color: Option<Rgb>,
+    pub bold: bool,
+    pub italic: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,14 +79,14 @@ pub struct Segment {
     pub text: String,
     pub inline: bool,
     pub search: bool,
-    pub color: Option<Rgb>,
+    pub syntax: SyntaxStyle,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 struct Attrs {
     inline: bool,
     search: bool,
-    color: Option<Rgb>,
+    syntax: SyntaxStyle,
 }
 
 pub fn display_width(s: &str, opts: TextOpts) -> usize {
@@ -132,7 +140,7 @@ pub fn render_line(
 
     let push = |out: &mut Vec<Segment>, text: &str, attrs: Attrs| {
         let matches_last = out.last().is_some_and(|s| {
-            s.inline == attrs.inline && s.search == attrs.search && s.color == attrs.color
+            s.inline == attrs.inline && s.search == attrs.search && s.syntax == attrs.syntax
         });
         if matches_last {
             out.last_mut()
@@ -144,7 +152,7 @@ pub fn render_line(
                 text: text.to_string(),
                 inline: attrs.inline,
                 search: attrs.search,
-                color: attrs.color,
+                syntax: attrs.syntax,
             });
         }
     };
@@ -163,7 +171,10 @@ pub fn render_line(
         let attrs = Attrs {
             inline: inline.find(byte, Clone::clone).is_some(),
             search: search.find(byte, Clone::clone).is_some(),
-            color: colors.find(byte, |(r, _)| r.clone()).map(|(_, c)| *c),
+            syntax: colors
+                .find(byte, |(r, _)| r.clone())
+                .map(|(_, style)| *style)
+                .unwrap_or_default(),
         };
 
         // 境界にまたがる文字は空白で埋め、桁が崩れないようにする
@@ -276,7 +287,11 @@ mod tests {
 
     #[test]
     fn render_applies_syntax_colors() {
-        let red = Rgb::new(255, 0, 0);
+        let red = SyntaxStyle {
+            color: Some(Rgb::new(255, 0, 0)),
+            bold: true,
+            italic: false,
+        };
         let colors = [(0..3, red)];
         let marks = Marks {
             colors: &colors,
@@ -284,8 +299,8 @@ mod tests {
         };
         let segs = render_line("let x", marks, opts(), 0, 20);
         assert_eq!(segs[0].text, "let");
-        assert_eq!(segs[0].color, Some(red));
-        assert_eq!(segs[1].color, None);
+        assert_eq!(segs[0].syntax, red);
+        assert_eq!(segs[1].syntax, SyntaxStyle::default());
     }
 
     #[test]

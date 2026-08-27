@@ -159,7 +159,7 @@ impl FileConfig {
             }
             if let Some(name) = theme.syntax {
                 let known = crate::highlight::theme_names();
-                if !known.contains(&name.as_str()) {
+                if !known.contains(&name) {
                     bail!(
                         "theme.syntax が不明 (指定値: {name})。利用可能: {}",
                         known.join(", ")

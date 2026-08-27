@@ -1,4 +1,4 @@
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
 use super::text::Segment;
@@ -8,8 +8,14 @@ use super::theme::Theme;
 /// 優先度は 検索一致 > 語単位差分 > シンタックスハイライト の順。
 pub fn style_for(segment: &Segment, base: Style, inline_bg: Color, theme: &Theme) -> Style {
     let mut style = base;
-    if let Some(rgb) = segment.color {
+    if let Some(rgb) = segment.syntax.color {
         style = style.fg(theme.syntax_color(rgb));
+    }
+    if segment.syntax.bold {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if segment.syntax.italic {
+        style = style.add_modifier(Modifier::ITALIC);
     }
     if segment.inline {
         style = style.bg(inline_bg);
