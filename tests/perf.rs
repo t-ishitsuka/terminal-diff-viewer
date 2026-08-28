@@ -180,10 +180,16 @@ fn nfr_02_diff_is_drawn_within_budget() {
     h.draw();
     let elapsed = start.elapsed();
 
-    // 色付けは後追いのため要件外。実際に色が乗るまでの時間を参考値として測る
-    h.pump_until("色付け", |app| {
+    // 色付けは後追いのため要件外。可視範囲と全文それぞれの到達を参考値として測る
+    h.pump_until("可視範囲の色付け", |app| {
         matches!(&app.content, ContentState::Diff(v)
             if v.old_highlight.is_some() && v.new_highlight.is_some())
+    });
+    let visible_colored = start.elapsed();
+    h.pump_until("全文の色付け", |app| {
+        matches!(&app.content, ContentState::Diff(v)
+            if covered(&v.old_highlight) >= v.diff.old.len()
+                && covered(&v.new_highlight) >= v.diff.new.len())
     });
     let colored = start.elapsed();
 
@@ -195,7 +201,12 @@ fn nfr_02_diff_is_drawn_within_budget() {
         view.diff.hunks.len()
     );
     report("選択から差分描画", elapsed, DIFF_BUDGET);
-    println!("選択から色付け完了: {colored:?} (参考値。後追いのため要件外)");
+    println!("選択から可視範囲の色付け: {visible_colored:?} (参考値。後追いのため要件外)");
+    println!("選択から全文の色付け: {colored:?} (参考値。後追いのため要件外)");
     assert_eq!(view.diff.rows.len(), DIFF_LINES, "全文が保持されていない");
     assert!(elapsed <= DIFF_BUDGET, "NFR-02 未達: {elapsed:?}");
+}
+
+fn covered(highlight: &Option<std::sync::Arc<tdv::highlight::Highlighted>>) -> usize {
+    highlight.as_ref().map_or(0, |h| h.covered_lines())
 }

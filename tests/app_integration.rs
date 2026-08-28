@@ -744,3 +744,49 @@ fn repeated_hunk_jump_advances_through_every_hunk() {
     h.act(Action::NextHunk);
     assert_eq!(current_hunk(&h), Some(0));
 }
+
+/// 可視範囲の先行色付けを確かめるため、画面より十分長いファイルを用意する。
+fn setup_long_file_repo(root: &Path) {
+    git(root, &["init", "-q", "-b", "main"]);
+    let body: String = (1..=300).map(|i| format!("fn f{i}() {{}}\n")).collect();
+    std::fs::write(root.join("long.rs"), &body).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "init"]);
+}
+
+#[test]
+fn visible_range_is_colored_before_the_whole_file() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_long_file_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("ルートの読み込み", |app| {
+        app.fs_tree.node_count() > 1
+    });
+    h.act(Action::TreeMove(0));
+    h.pump_until("ファイル読み込み", |app| {
+        matches!(&app.content, ContentState::Text(_))
+    });
+
+    fn covered(h: &Harness) -> usize {
+        let ContentState::Text(view) = &h.app.content else {
+            panic!("内容が表示されていない");
+        };
+        view.highlight.as_ref().map_or(0, |v| v.covered_lines())
+    }
+
+    h.pump_until(
+        "可視範囲の色付け",
+        |app| matches!(&app.content, ContentState::Text(v) if v.highlight.is_some()),
+    );
+    let first = covered(&h);
+    assert!(
+        (1..300).contains(&first),
+        "先に届くのは可視範囲ぶんのはず: {first}"
+    );
+
+    h.pump_until("全文の色付け", |app| {
+        matches!(&app.content, ContentState::Text(v)
+            if v.highlight.as_ref().is_some_and(|hl| hl.covered_lines() >= 300))
+    });
+    assert_eq!(covered(&h), 300);
+}

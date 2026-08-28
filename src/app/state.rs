@@ -436,7 +436,10 @@ impl App {
     }
 
     /// 本文が届いた後に色付けを依頼する。5000 行規模では色付けが差分計算より
-    /// 2 桁重いため、素のテキストを先に出して色は後から重ねる。
+    /// 2 桁重いため、素のテキストを先に出して色を後から重ねる。
+    ///
+    /// 可視範囲ぶんと全文を続けて投げる。ワーカーは先入れ先出しで処理するため、
+    /// 画面に見えている範囲の色が先に届く。
     pub fn request_highlight(
         &self,
         generation: u64,
@@ -447,6 +450,19 @@ impl App {
         let Some((theme, max_lines)) = self.highlight_options() else {
             return;
         };
+        // 画面 1 面ぶんでは足りない場合があるため少し多めに色付けする
+        let visible = self.content_height.saturating_mul(2).max(64);
+        if visible < table.len() {
+            self.pool.submit(TaskRequest::Highlight {
+                generation,
+                target,
+                path: path.clone(),
+                table: table.clone(),
+                theme: theme.clone(),
+                max_lines,
+                upto: visible,
+            });
+        }
         self.pool.submit(TaskRequest::Highlight {
             generation,
             target,
@@ -454,6 +470,7 @@ impl App {
             table,
             theme,
             max_lines,
+            upto: usize::MAX,
         });
     }
     /// ツリーの選択に応じて右ペインの読み込みを依頼する。

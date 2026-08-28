@@ -1,10 +1,12 @@
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::action::Action;
 use super::state::{
     App, ContentState, DiffView, DisplayRow, Focus, InputKind, Mode, Overlay, TextView,
 };
+use crate::highlight::Highlighted;
 use crate::task::{Content, HighlightTarget, TaskResult, TextOutcome};
 use crate::vfs::{Node, TreeModel};
 
@@ -647,16 +649,31 @@ pub fn on_task(app: &mut App, result: TaskResult) {
                 return;
             }
             match (&mut app.content, target) {
-                (ContentState::Text(view), HighlightTarget::Text) => view.highlight = highlight,
+                (ContentState::Text(view), HighlightTarget::Text) => {
+                    keep_wider(&mut view.highlight, highlight);
+                }
                 (ContentState::Diff(view), HighlightTarget::DiffOld) => {
-                    view.old_highlight = highlight;
+                    keep_wider(&mut view.old_highlight, highlight);
                 }
                 (ContentState::Diff(view), HighlightTarget::DiffNew) => {
-                    view.new_highlight = highlight;
+                    keep_wider(&mut view.new_highlight, highlight);
                 }
                 _ => {}
             }
         }
+    }
+}
+
+/// 可視範囲ぶんと全文の結果は順不同で届きうる。色付け済みの行数が多い方を残す。
+fn keep_wider(current: &mut Option<Arc<Highlighted>>, incoming: Option<Arc<Highlighted>>) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    let wider = current
+        .as_ref()
+        .is_none_or(|c| incoming.covered_lines() >= c.covered_lines());
+    if wider {
+        *current = Some(incoming);
     }
 }
 

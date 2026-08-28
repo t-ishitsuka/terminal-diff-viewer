@@ -19,6 +19,11 @@ pub struct Highlighted {
 }
 
 impl Highlighted {
+    /// 色付け済みの行数。先行結果と全文結果の新旧判定に使う。
+    pub fn covered_lines(&self) -> usize {
+        self.lines.len()
+    }
+
     pub fn line(&self, index: u32) -> &[(Range<usize>, SyntaxStyle)] {
         self.lines
             .get(index as usize)
@@ -307,19 +312,23 @@ fn find_syntax<'a>(
     first_line.and_then(|line| assets.syntaxes.find_syntax_by_first_line(line))
 }
 
-/// ファイル全体をワーカースレッドで色付けする。
+/// 先頭から `upto` 行目までをワーカースレッドで色付けする。
 ///
 /// syntect のパーサは先頭行から順に状態を送る必要があり、途中行から再開できない。
-/// 可視範囲だけを遅延処理してもパース総量は変わらないため、上限行数までは一括で
-/// 色付けし、超えるものは色付けしない方針を採る。
-/// 計算はワーカー側で行うので、結果が届くまでは素のテキストが表示される。
+/// そのため可視範囲を先に色付けして送り、続けて全文を色付けして送る 2 段階で呼ぶ。
+/// 行数が上限 (`ui.max_highlight_lines`) を超えるファイルは色付けしない。
 pub fn highlight(
     table: &crate::diff::LineTable,
     path: &Path,
     theme_name: &str,
     max_lines: usize,
+    upto: usize,
 ) -> Option<Arc<Highlighted>> {
     if table.is_empty() || table.len() > max_lines {
+        return None;
+    }
+    let count = upto.min(table.len());
+    if count == 0 {
         return None;
     }
     let assets = assets();
@@ -332,9 +341,9 @@ pub fn highlight(
         .or_else(|| assets.themes.themes.get(DEFAULT_THEME))?;
 
     let mut highlighter = HighlightLines::new(syntax, theme);
-    let mut lines = Vec::with_capacity(table.len());
+    let mut lines = Vec::with_capacity(count);
     let mut buffer = String::new();
-    for index in 0..table.len() as u32 {
+    for index in 0..count as u32 {
         let Ok(text) = std::str::from_utf8(table.line_display(index)) else {
             // 不正な UTF-8 の行は色付けせず、パーサの状態だけ進める
             lines.push(Vec::new());
@@ -348,7 +357,7 @@ pub fn highlight(
         };
         lines.push(to_colors(&regions, text.len()));
     }
-    lines.resize(table.len(), Vec::new());
+    lines.resize(count, Vec::new());
     Some(Arc::new(Highlighted { lines }))
 }
 
@@ -400,7 +409,8 @@ mod tests {
         let source =
             "// コメント\nfn main() {\n    let count: usize = 1;\n    println!(\"hi\");\n}\n";
         let t = table(source);
-        let h = highlight(&t, Path::new("main.rs"), DEFAULT_THEME, 1000).expect("色付けされる");
+        let h = highlight(&t, Path::new("main.rs"), DEFAULT_THEME, 1000, usize::MAX)
+            .expect("色付けされる");
         let mut all: Vec<Rgb> = (0..t.len() as u32).flat_map(|i| colors(&h, i)).collect();
         all.sort_by_key(|c| (c.r, c.g, c.b));
         all.dedup();
@@ -411,7 +421,7 @@ mod tests {
     #[test]
     fn comments_are_italic() {
         let t = table("// メモ\nfn main() {}\n");
-        let h = highlight(&t, Path::new("a.rs"), DEFAULT_THEME, 1000).unwrap();
+        let h = highlight(&t, Path::new("a.rs"), DEFAULT_THEME, 1000, usize::MAX).unwrap();
         assert!(
             h.line(0).iter().any(|(_, s)| s.italic),
             "コメントが斜体にならない"
@@ -421,7 +431,7 @@ mod tests {
     #[test]
     fn ranges_stay_inside_the_line() {
         let t = table("fn main() {}\n");
-        let h = highlight(&t, Path::new("main.rs"), DEFAULT_THEME, 1000).unwrap();
+        let h = highlight(&t, Path::new("main.rs"), DEFAULT_THEME, 1000, usize::MAX).unwrap();
         let len = t.line_display(0).len();
         for (range, _) in h.line(0) {
             assert!(range.end <= len, "{range:?} が行長 {len} を超えている");
@@ -431,13 +441,22 @@ mod tests {
     #[test]
     fn unknown_extension_is_not_highlighted() {
         let t = table("なにか\n");
-        assert!(highlight(&t, Path::new("a.unknown-ext"), DEFAULT_THEME, 1000).is_none());
+        assert!(
+            highlight(
+                &t,
+                Path::new("a.unknown-ext"),
+                DEFAULT_THEME,
+                1000,
+                usize::MAX
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn oversized_file_is_skipped() {
         let t = table(&"x\n".repeat(50));
-        assert!(highlight(&t, Path::new("a.rs"), DEFAULT_THEME, 10).is_none());
+        assert!(highlight(&t, Path::new("a.rs"), DEFAULT_THEME, 10, usize::MAX).is_none());
     }
 
     #[test]
@@ -446,5 +465,17 @@ mod tests {
         assert!(names.contains(&"tdv-dark".to_string()));
         assert!(names.contains(&"tdv-light".to_string()));
         assert!(names.contains(&"base16-ocean.dark".to_string()));
+    }
+
+    #[test]
+    fn upto_limits_the_colored_lines() {
+        let t = table(&"fn main() {}\n".repeat(10));
+        let partial = highlight(&t, Path::new("a.rs"), DEFAULT_THEME, 1000, 3).unwrap();
+        let full = highlight(&t, Path::new("a.rs"), DEFAULT_THEME, 1000, usize::MAX).unwrap();
+        assert_eq!(partial.covered_lines(), 3);
+        assert_eq!(full.covered_lines(), 10);
+        // 色付けしていない行は空として扱える
+        assert!(partial.line(5).is_empty());
+        assert_eq!(partial.line(0), full.line(0));
     }
 }

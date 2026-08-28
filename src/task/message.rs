@@ -39,6 +39,8 @@ pub enum TaskRequest {
         table: LineTable,
         theme: String,
         max_lines: usize,
+        /// 先頭から何行目まで色付けするか。可視範囲の先行送信に使う。
+        upto: usize,
     },
 }
 

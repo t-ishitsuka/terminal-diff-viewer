@@ -94,10 +94,11 @@ fn handle(ctx: &WorkerCtx, request: TaskRequest) -> TaskResult {
             table,
             theme,
             max_lines,
+            upto,
         } => TaskResult::Highlight {
             generation,
             target,
-            highlight: highlight(&table, &path, &theme, max_lines),
+            highlight: highlight(&table, &path, &theme, max_lines, upto),
         },
     }
 }
