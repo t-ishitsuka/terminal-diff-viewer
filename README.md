@@ -29,8 +29,8 @@ nix build              # Nix パッケージとしてビルド
 | `/` | ツリー: 名前で絞り込み  内容: 検索 |
 | `n` `N` | 次 / 前の検索一致 |
 | `z` | ツリー: 展開トグル  内容: 折り畳みトグル |
-| `u` | unified 表示トグル |
-| `I` / `T` | ignore 表示 / 階層表示のトグル |
+| `u` / `w` | side-by-side / unified 切替  行折り返しトグル |
+| `I` / `T` / `S` | ignore 表示 / 階層表示 / 並び順 (パス・変更種別) のトグル |
 | `r` | リロード |
 | `?` / `q` | ヘルプ / 終了 |
 
@@ -47,7 +47,7 @@ tdv [PATH] [--config <PATH>] [--no-highlight] [--max-file-bytes <N>]
 
 ```toml
 [ui]
-tree_ratio = 3              # 左ペインの比率 (右は 10 - tree_ratio)。1〜8
+tree_ratio = 5              # 左ペインの比率 (全体を 20 とした値。右は 20 - tree_ratio)。1〜16
 show_status_bar = true
 tab_width = 4
 ambiguous_width_wide = false
@@ -71,12 +71,14 @@ syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定�
 | --- | --- |
 | tree モード (遅延展開・ignore 準拠・ステータス記号・種別で色分け) | 実装済み |
 | diff モード (作業ツリー vs HEAD、全文 side-by-side) | 実装済み |
-| 語単位ハイライト / 変更箇所ジャンプ / 折り畳み / unified 切替 | 実装済み |
+| 語単位ハイライト / 変更箇所ジャンプ / 折り畳み | 実装済み |
+| unified 切替 (`u`) / 行折り返し (`w`) / 並び順 (`S`) | 実装済み |
 | シンタックスハイライト (同梱テーマ tdv-dark / tdv-light) | 実装済み |
 | 検索 (内容) / 絞り込み (ファイル名) | 実装済み |
 | 設定ファイル / Nix パッケージ | 実装済み |
 | バイナリ・巨大ファイル・CRLF・末尾改行欠落の扱い | 実装済み |
 | キーマップの設定上書き | 未実装 |
+| 行のクリップボードコピー (`y`、OSC 52) | 未実装 |
 
 詳細は [docs/06-implementation-plan.md](docs/06-implementation-plan.md) の進捗表を参照。
 

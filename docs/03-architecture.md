@@ -24,7 +24,7 @@ src/
 │   └── update.rs         Action + TaskResult → 状態遷移
 ├── ui/
 │   ├── mod.rs            draw エントリ
-│   ├── layout.rs         レイアウト計算 (3:7 / 3:3.5:3.5、縮退規則)
+│   ├── layout.rs         レイアウト計算 (5:15 / 5:7.5:7.5、縮退規則)
 │   ├── tree_pane.rs
 │   ├── content_pane.rs   tree モードの単一表示
 │   ├── diff_pane.rs      diff モードの左右対比表示
@@ -218,6 +218,7 @@ pub struct BlobContent {
 - 差分ペインは `AlignedDiff.rows` の可視スライスのみを `Line` へ変換する。10 万行のファイルでも 1 フレームの変換対象は端末高さ分に限られる
 - 全角文字の桁揃えは `ui/text.rs` に集約する。`unicode-width` で表示幅を求め、切り詰めは幅基準で行う。East Asian Ambiguous 文字の扱いは設定で切り替える (既定は狭幅)
 - タブ文字は表示幅 (既定 4) で空白展開してから幅計算する
+- 行折り返しは 1 論理行を複数の画面行へ展開する。side-by-side では左右で折り返し行数が変わるため、少ない側を余白行で埋めてペア行の対応を保つ (`ui/diff_pane.rs`)
 
 ## 7. 端末の初期化と復旧
 
@@ -239,7 +240,7 @@ pub struct BlobContent {
 
 ```toml
 [ui]
-tree_ratio = 3              # 左ペインの比率 (右は 10 - tree_ratio)。1〜8
+tree_ratio = 5              # 左ペインの比率 (全体を 20 とした値。右は 20 - tree_ratio)。1〜16
 show_status_bar = true
 tab_width = 4
 ambiguous_width_wide = false
