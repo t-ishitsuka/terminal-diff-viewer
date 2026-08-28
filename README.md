@@ -114,3 +114,7 @@ cargo test --release --test perf -- --ignored --nocapture
 ```
 
 MSRV は 1.88 (let-chains を使うため)。統合テストは一時ディレクトリに実 Git リポジトリを作り、`git` コマンドの結果と照合する。
+
+## ライセンス
+
+MIT ([LICENSE](LICENSE))。
