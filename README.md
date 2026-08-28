@@ -77,7 +77,6 @@ syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定�
 | 検索 (内容) / 絞り込み (ファイル名) | 実装済み |
 | 設定ファイル / Nix パッケージ | 実装済み |
 | バイナリ・巨大ファイル・CRLF・末尾改行欠落の扱い | 実装済み |
-| 行のクリップボードコピー (`y`、OSC 52) | 未実装 |
 
 詳細は [docs/06-implementation-plan.md](docs/06-implementation-plan.md) の進捗表を参照。
 
@@ -106,7 +105,7 @@ syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定�
 ## 開発
 
 ```sh
-cargo test                 # 単体 53 + 統合 19
+cargo test                 # 単体 54 + 統合 20
 cargo clippy --all-targets
 nix build                  # サンドボックス内でテストごとビルド
 

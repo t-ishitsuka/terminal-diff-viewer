@@ -191,7 +191,7 @@ pub struct BlobContent {
 | `ReadDir` | ディレクトリ展開 | 子ノード一覧 |
 | `LoadText` | tree モードでファイル選択 | `BlobContent` |
 | `ComputeDiff` | diff モードでファイル選択 | `AlignedDiff` |
-| `Highlight` | 本文の表示後 (差分は左右それぞれ) | 行ごとのスタイル |
+| `Highlight` | 本文の表示後、可視範囲 → 全文の順 (差分は左右それぞれ) | 行ごとのスタイル |
 
 ### 5.3 陳腐化の破棄
 
