@@ -111,6 +111,8 @@ pub struct DiffView {
     pub expanded_gaps: HashSet<u32>,
     pub offset: usize,
     pub hscroll: usize,
+    /// 直近にジャンプした変更箇所の番号。手動スクロールで解除する。
+    pub hunk_cursor: Option<usize>,
     pub inline: HashMap<u32, InlineSpans>,
 }
 
@@ -133,6 +135,7 @@ impl DiffView {
             expanded_gaps: HashSet::new(),
             offset: 0,
             hscroll: 0,
+            hunk_cursor: None,
             inline: HashMap::new(),
         };
         view.rebuild_display(context);
@@ -218,6 +221,17 @@ impl DiffView {
             Some(DisplayRow::Gap { start, .. }) => start,
             None => 0,
         }
+    }
+
+    /// 変更箇所ジャンプの基準行。ジャンプ後に対象を置く位置と同じにして、
+    /// 続けて押したときに同じ変更箇所へ戻らないようにする。
+    pub fn anchor_row(&self, height: usize) -> u32 {
+        let len = self.display_len();
+        if len == 0 {
+            return 0;
+        }
+        let index = (self.offset + height.max(1) / 4).min(len - 1);
+        self.row_at_display(index)
     }
 
     /// 変更ペア行の語単位差分。可視行のみ遅延計算し、結果を保持する。

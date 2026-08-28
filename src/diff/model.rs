@@ -116,18 +116,16 @@ pub struct AlignedDiff {
 
 impl AlignedDiff {
     /// `from` より後で最初に始まる変更ブロックの先頭行。
-    pub fn next_hunk_row(&self, from: usize) -> Option<usize> {
-        self.hunks
-            .iter()
-            .map(|h| h.rows.start as usize)
-            .find(|&r| r > from)
+    /// 指定行より後にある最初の変更箇所の番号。
+    pub fn next_hunk_index(&self, row: usize) -> Option<usize> {
+        self.hunks.iter().position(|h| h.rows.start as usize > row)
     }
 
-    pub fn prev_hunk_row(&self, from: usize) -> Option<usize> {
+    /// 指定行より前にある最後の変更箇所の番号。
+    pub fn prev_hunk_index(&self, row: usize) -> Option<usize> {
         self.hunks
             .iter()
-            .map(|h| h.rows.start as usize)
-            .rfind(|&r| r < from)
+            .rposition(|h| (h.rows.start as usize) < row)
     }
 
     pub fn hunk_index_at(&self, row: usize) -> Option<usize> {

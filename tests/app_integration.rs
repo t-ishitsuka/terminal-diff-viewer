@@ -531,3 +531,69 @@ fn tree_entries_are_colored_by_file_kind() {
     all.dedup();
     assert_eq!(all.len(), 4, "種別ごとに色が分かれていない: {all:?}");
 }
+
+/// 変更箇所を 2 つ持つファイル。連続ジャンプの検証に使う。
+fn setup_two_hunk_repo(root: &Path) {
+    git(root, &["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("h.txt"), numbered(60)).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "init"]);
+    let edited = numbered(60)
+        .replace("line 10\n", "line 10 changed\n")
+        .replace("line 50\n", "line 50 changed\n");
+    std::fs::write(root.join("h.txt"), edited).unwrap();
+}
+
+#[test]
+fn repeated_hunk_jump_advances_through_every_hunk() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_two_hunk_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 24);
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+    h.act(Action::SetMode(Mode::Diff));
+    h.pump_until("差分の計算", |app| {
+        matches!(&app.content, ContentState::Diff(_))
+    });
+    h.render();
+
+    fn current_hunk(h: &Harness) -> Option<usize> {
+        let ContentState::Diff(view) = &h.app.content else {
+            panic!("差分が表示されていない");
+        };
+        assert_eq!(view.diff.hunks.len(), 2, "変更箇所が 2 つでない");
+        view.hunk_cursor
+    }
+
+    h.act(Action::NextHunk);
+    assert_eq!(current_hunk(&h), Some(0));
+    let screen = h.render();
+    assert!(screen.contains("line 10 changed"), "{screen}");
+
+    // 2 回目で次の変更箇所へ進む (同じ箇所に留まらない)
+    h.act(Action::NextHunk);
+    assert_eq!(current_hunk(&h), Some(1));
+    let screen = h.render();
+    assert!(
+        screen.contains("line 50 changed"),
+        "2 つ目の変更箇所が見えていない\n{screen}"
+    );
+
+    h.act(Action::NextHunk);
+    assert_eq!(current_hunk(&h), Some(1), "末尾で位置が動いている");
+    assert_eq!(
+        h.app.notice.as_deref(),
+        Some("これ以降に変更箇所はない"),
+        "終端が通知されていない"
+    );
+
+    h.act(Action::PrevHunk);
+    assert_eq!(current_hunk(&h), Some(0), "戻れていない");
+    let screen = h.render();
+    assert!(screen.contains("line 10 changed"), "{screen}");
+
+    // 手動スクロール後は現在位置から探し直す
+    h.act(Action::ContentFirst);
+    assert_eq!(current_hunk(&h), None);
+    h.act(Action::NextHunk);
+    assert_eq!(current_hunk(&h), Some(0));
+}

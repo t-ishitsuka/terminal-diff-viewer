@@ -86,8 +86,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
 
     let position = match &app.content {
         ContentState::Diff(view) => {
-            let row = view.row_at_display(view.offset) as usize;
-            match view.diff.hunk_index_at(row) {
+            let row = view.anchor_row(app.content_height) as usize;
+            match view.hunk_cursor.or_else(|| view.diff.hunk_index_at(row)) {
                 Some(i) => format!("hunk {}/{}", i + 1, view.diff.hunks.len()),
                 None => format!("{} 箇所", view.diff.hunks.len()),
             }

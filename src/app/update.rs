@@ -239,7 +239,11 @@ fn set_offset(app: &mut App, value: usize) {
     let value = value.min(max);
     match &mut app.content {
         ContentState::Text(v) => v.offset = value,
-        ContentState::Diff(v) => v.offset = value,
+        ContentState::Diff(v) => {
+            v.offset = value;
+            // 手動スクロール後は現在位置から探し直す
+            v.hunk_cursor = None;
+        }
         _ => {}
     }
 }
@@ -268,13 +272,22 @@ fn jump_hunk(app: &mut App, forward: bool) {
     let ContentState::Diff(view) = &mut app.content else {
         return;
     };
-    let current = view.row_at_display(view.offset) as usize;
-    let target = if forward {
-        view.diff.next_hunk_row(current)
-    } else {
-        view.diff.prev_hunk_row(current)
+    let count = view.diff.hunks.len();
+    // 直前のジャンプ先を覚えておく。スクロール位置から逆算すると、
+    // 画面端で位置が丸められたときに同じ変更箇所へ戻ってしまう
+    let target = match view.hunk_cursor {
+        Some(index) if forward => (index + 1 < count).then_some(index + 1),
+        Some(index) => index.checked_sub(1),
+        None => {
+            let row = view.anchor_row(height) as usize;
+            if forward {
+                view.diff.next_hunk_index(row)
+            } else {
+                view.diff.prev_hunk_index(row)
+            }
+        }
     };
-    let Some(row) = target else {
+    let Some(index) = target else {
         app.notice = Some(if forward {
             "これ以降に変更箇所はない".into()
         } else {
@@ -282,9 +295,11 @@ fn jump_hunk(app: &mut App, forward: bool) {
         });
         return;
     };
+    view.hunk_cursor = Some(index);
     // 変更ブロックの先頭が画面上部から 1/4 の位置に来るようにする
-    let index = view.display_index_of_row(row as u32);
-    view.offset = index.saturating_sub(height / 4);
+    let row = view.diff.hunks[index].rows.start;
+    let display = view.display_index_of_row(row);
+    view.offset = display.saturating_sub(height / 4);
     let max = view.display_len().saturating_sub(height);
     view.offset = view.offset.min(max);
 }
