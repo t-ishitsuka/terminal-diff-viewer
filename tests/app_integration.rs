@@ -12,7 +12,7 @@ use ratatui::backend::TestBackend;
 use tdv::app::state::{App, ContentState, Focus, Mode};
 use tdv::app::{action::Action, update};
 use tdv::config::Config;
-use tdv::git::{GitBackend, gix_backend::GixBackend};
+use tdv::git::{DiffSpec, GitBackend, gix_backend::GixBackend};
 use tdv::task::{AppEvent, Pool, WorkerCtx};
 
 fn git(dir: &Path, args: &[&str]) {
@@ -789,4 +789,164 @@ fn visible_range_is_colored_before_the_whole_file() {
             if v.highlight.as_ref().is_some_and(|hl| hl.covered_lines() >= 300))
     });
     assert_eq!(covered(&h), 300);
+}
+
+/// staged のみ / unstaged のみ / 両方 (3 者で内容が違う) を含むリポジトリ。
+fn setup_staged_repo(root: &Path) {
+    git(root, &["init", "-q", "-b", "main"]);
+    for name in ["staged.txt", "unstaged.txt", "both.txt"] {
+        std::fs::write(root.join(name), "v1\n").unwrap();
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "init"]);
+
+    std::fs::write(root.join("staged.txt"), "v2\n").unwrap();
+    git(root, &["add", "staged.txt"]);
+
+    std::fs::write(root.join("unstaged.txt"), "v2\n").unwrap();
+
+    // HEAD=v1 / index=v2 / 作業ツリー=v3。比較対象ごとに内容が変わる
+    std::fs::write(root.join("both.txt"), "v2\n").unwrap();
+    git(root, &["add", "both.txt"]);
+    std::fs::write(root.join("both.txt"), "v3\n").unwrap();
+}
+
+fn git_output(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("git を実行できない");
+    assert!(out.status.success(), "git {args:?} が失敗");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn changed_paths(h: &Harness) -> Vec<String> {
+    let mut paths: Vec<String> = h
+        .app
+        .changes
+        .files
+        .iter()
+        .map(|c| c.path.display().to_string())
+        .collect();
+    paths.sort();
+    paths
+}
+
+fn expected_paths(out: &str) -> Vec<String> {
+    let mut paths: Vec<String> = out
+        .lines()
+        .filter_map(|l| l.split('\t').nth(1).map(str::to_string))
+        .collect();
+    paths.sort();
+    paths
+}
+
+#[test]
+fn diff_spec_switches_the_change_list() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_staged_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+
+    // 作業ツリー vs HEAD: 3 ファイルすべてが変更として出る
+    assert_eq!(
+        changed_paths(&h),
+        expected_paths(&git_output(dir.path(), &["diff", "HEAD", "--name-status"]))
+    );
+    assert_eq!(changed_paths(&h).len(), 3);
+
+    let next_spec = |h: &mut Harness| {
+        let before = h.app.status_generation;
+        h.act(Action::CycleDiffSpec);
+        h.pump_until("status 再取得", |app| {
+            app.status_generation > before && !app.scanning
+        });
+    };
+
+    next_spec(&mut h);
+    assert_eq!(h.app.diff_spec, DiffSpec::StagedVsHead);
+    assert_eq!(
+        changed_paths(&h),
+        expected_paths(&git_output(
+            dir.path(),
+            &["diff", "--cached", "--name-status"]
+        ))
+    );
+    assert_eq!(changed_paths(&h), vec!["both.txt", "staged.txt"]);
+
+    next_spec(&mut h);
+    assert_eq!(h.app.diff_spec, DiffSpec::WorktreeVsIndex);
+    assert_eq!(
+        changed_paths(&h),
+        expected_paths(&git_output(dir.path(), &["diff", "--name-status"]))
+    );
+    assert_eq!(changed_paths(&h), vec!["both.txt", "unstaged.txt"]);
+
+    next_spec(&mut h);
+    assert_eq!(h.app.diff_spec, DiffSpec::WorktreeVsHead);
+    assert_eq!(changed_paths(&h).len(), 3);
+}
+
+#[test]
+fn staged_diff_reads_the_index_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_staged_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+    h.act(Action::SetMode(Mode::Diff));
+    h.pump_until("差分の計算", |app| {
+        matches!(&app.content, ContentState::Diff(_))
+    });
+
+    let open_both = |h: &mut Harness| {
+        while h
+            .app
+            .content
+            .path()
+            .is_none_or(|p| p != Path::new("both.txt"))
+        {
+            h.act(Action::NextFile);
+            h.pump_until("差分の計算", |app| {
+                matches!(&app.content, ContentState::Diff(_))
+            });
+        }
+    };
+    let sides = |h: &Harness| -> (String, String) {
+        let ContentState::Diff(view) = &h.app.content else {
+            panic!("差分が表示されていない");
+        };
+        (
+            String::from_utf8_lossy(view.diff.old.line_display(0)).into_owned(),
+            String::from_utf8_lossy(view.diff.new.line_display(0)).into_owned(),
+        )
+    };
+
+    open_both(&mut h);
+    // HEAD=v1 / index=v2 / 作業ツリー=v3
+    assert_eq!(sides(&h), ("v1".into(), "v3".into()));
+
+    h.act(Action::CycleDiffSpec);
+    h.pump_until("staged の差分", |app| {
+        app.diff_spec == DiffSpec::StagedVsHead && matches!(&app.content, ContentState::Diff(_))
+    });
+    open_both(&mut h);
+    assert_eq!(
+        sides(&h),
+        ("v1".into(), "v2".into()),
+        "index の内容が出ていない"
+    );
+
+    h.act(Action::CycleDiffSpec);
+    h.pump_until("unstaged の差分", |app| {
+        app.diff_spec == DiffSpec::WorktreeVsIndex && matches!(&app.content, ContentState::Diff(_))
+    });
+    open_both(&mut h);
+    assert_eq!(
+        sides(&h),
+        ("v2".into(), "v3".into()),
+        "index を旧側にしていない"
+    );
 }

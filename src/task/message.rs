@@ -4,7 +4,7 @@ use std::sync::Arc;
 use ratatui::crossterm::event::Event;
 
 use crate::diff::{AlignedDiff, LineTable};
-use crate::git::{ChangeSet, FileChange, HeadInfo, UnsupportedReason};
+use crate::git::{ChangeSet, DiffSpec, FileChange, HeadInfo, UnsupportedReason};
 use crate::highlight::Highlighted;
 use crate::vfs::DirEntry;
 
@@ -15,6 +15,7 @@ pub type HighlightOptions = Option<(String, usize)>;
 pub enum TaskRequest {
     ScanStatus {
         generation: u64,
+        spec: DiffSpec,
     },
     ReadDir {
         generation: u64,
@@ -30,6 +31,7 @@ pub enum TaskRequest {
     ComputeDiff {
         generation: u64,
         change: FileChange,
+        spec: DiffSpec,
     },
     /// 内容が出た後に走らせる色付け。重いので本文の表示を待たせない。
     Highlight {

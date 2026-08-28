@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::diff::{AlignedDiff, InlineSpans, LineTable, RowKind, inline_diff};
-use crate::git::{ChangeKind, ChangeSet, FileChange, GitBackend, HeadInfo, UnsupportedReason};
+use crate::git::{
+    ChangeKind, ChangeSet, DiffSpec, FileChange, GitBackend, HeadInfo, UnsupportedReason,
+};
 use crate::highlight::Highlighted;
 use crate::task::{HighlightTarget, Pool, TaskRequest};
 use crate::vfs::{Node, TreeModel};
@@ -330,6 +332,8 @@ pub struct App {
     pub show_ignored: bool,
     pub hierarchical_changes: bool,
     pub change_sort: ChangeSort,
+    /// 差分の比較対象。起動後にキーで切り替える。
+    pub diff_spec: DiffSpec,
     /// 差分を強制的に unified 表示にする (端末幅による縮退とは独立)。
     pub unified: bool,
     /// 内容ペインの行折り返し。
@@ -373,6 +377,7 @@ impl App {
             show_ignored: false,
             hierarchical_changes: false,
             change_sort: ChangeSort::Path,
+            diff_spec: DiffSpec::WorktreeVsHead,
             unified: false,
             wrap: false,
             scanning: false,
@@ -416,7 +421,10 @@ impl App {
         self.status_generation += 1;
         self.scanning = true;
         let generation = self.status_generation;
-        self.pool.submit(TaskRequest::ScanStatus { generation });
+        self.pool.submit(TaskRequest::ScanStatus {
+            generation,
+            spec: self.diff_spec,
+        });
     }
 
     pub fn request_dir(&mut self, node: u32, rel: &Path) {
@@ -506,8 +514,11 @@ impl App {
                 self.content = ContentState::Loading {
                     path: node.path.clone(),
                 };
-                self.pool
-                    .submit(TaskRequest::ComputeDiff { generation, change });
+                self.pool.submit(TaskRequest::ComputeDiff {
+                    generation,
+                    change,
+                    spec: self.diff_spec,
+                });
             }
         }
     }

@@ -33,6 +33,7 @@ const HELP: &[(&str, &str)] = &[
     ("I", "ignore 対象の表示トグル (tree)"),
     ("T", "階層 / フラット表示トグル (diff)"),
     ("S", "並び順トグル: パス / 変更種別 (diff)"),
+    ("s", "比較対象トグル: 作業ツリー / staged / index"),
 ];
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {

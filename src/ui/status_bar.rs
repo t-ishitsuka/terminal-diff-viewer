@@ -6,6 +6,7 @@ use ratatui::widgets::Paragraph;
 use super::text::fit_width;
 use super::theme::Theme;
 use crate::app::{App, ChangeSort, ContentState, InputKind, Mode, Overlay};
+use crate::git::DiffSpec;
 
 pub fn draw_header(
     frame: &mut Frame,
@@ -117,6 +118,10 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     }
     if app.mode == Mode::Diff && app.change_sort != ChangeSort::Path {
         states.push(app.change_sort.label());
+    }
+    // 比較対象は差分の意味そのものを変えるため、既定以外は常に出す
+    if app.diff_spec != DiffSpec::WorktreeVsHead {
+        states.push(app.diff_spec.label());
     }
     let states = if states.is_empty() {
         String::new()

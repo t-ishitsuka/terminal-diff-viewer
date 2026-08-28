@@ -114,13 +114,12 @@ pub trait GitBackend: Send + Sync {
     fn load(&self, side: Side, change: &FileChange) -> Result<BlobContent>;
 }
 
-/// 差分の比較対象。v1 は WorktreeVsHead のみを実装する。
+/// 差分の比較対象。起動後にキーで切り替える。
 pub enum DiffSpec {
-    WorktreeVsHead,
-    // v2 で追加 (06 §5 の M6 / M8)
-    // StagedVsHead,
-    // WorktreeVsIndex,
-    // Range { from: Rev, to: Rev },
+    WorktreeVsHead,     // staged と unstaged を統合
+    StagedVsHead,       // stage 済みの変更のみ
+    WorktreeVsIndex,    // 未 stage の変更のみ
+    // Range { from: Rev, to: Rev },  // 06 §5 の M8 で追加
 }
 
 pub enum Side { Old, New }
@@ -146,6 +145,7 @@ pub struct BlobContent {
 | リポジトリ探索 | `gix::discover(cwd)` |
 | 変更一覧 | `Repository::status()` で得た Platform を反復し、`tree_index` と `index_worktree` の両方の項目をパス単位で統合する |
 | HEAD 側の内容 | `Repository::head_tree()` からパスを辿り blob を取得。リネーム時は `old_path` を使う |
+| index 側の内容 | `Repository::index()` の `entry_by_path` で blob の id を引き、`find_object` で読む |
 | 作業ツリー側の内容 | ファイルシステムから直接読む |
 | 未追跡ファイル | `index_worktree` の untracked 項目。HEAD 側は空として扱う |
 
@@ -163,7 +163,15 @@ pub struct BlobContent {
 | — | Untracked | Untracked |
 | Rewrite / Rename | * | Renamed (+ 内容差分) |
 
-> gix の `status` は index を経由するため、「作業ツリー vs HEAD」は上表の統合で表現する。統合規則は実装時にテーブル駆動のユニットテストで固定する。
+> gix の `status` は index を経由するため、「作業ツリー vs HEAD」は上表の統合で表現する。統合規則はテーブル駆動のユニットテストで固定している。
+
+`StagedVsHead` は `tree_index` の観測だけ、`WorktreeVsIndex` は `index_worktree` の観測だけを見る (統合しない)。比較対象ごとに左右の取得元も変わる:
+
+| 比較対象 | 旧側 | 新側 |
+| --- | --- | --- |
+| WorktreeVsHead | HEAD のツリー | 作業ツリー |
+| StagedVsHead | HEAD のツリー | index |
+| WorktreeVsIndex | index | 作業ツリー |
 
 ## 5. 並行処理
 
@@ -187,7 +195,7 @@ pub struct BlobContent {
 
 | タスク | 契機 | 結果 |
 | --- | --- | --- |
-| `ScanStatus` | 起動時 / リロード | `ChangeSet` |
+| `ScanStatus` | 起動時 / リロード / 比較対象の切り替え | `ChangeSet` |
 | `ReadDir` | ディレクトリ展開 | 子ノード一覧 |
 | `LoadText` | tree モードでファイル選択 | `BlobContent` |
 | `ComputeDiff` | diff モードでファイル選択 | `AlignedDiff` |

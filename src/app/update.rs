@@ -115,6 +115,14 @@ pub fn apply(app: &mut App, action: Action) {
                 reset_hscroll(app);
             }
         }
+        Action::CycleDiffSpec => {
+            app.diff_spec = app.diff_spec.next();
+            // 一覧の中身が変わるため、内容は status を引き直した後に読み込む
+            if app.mode == Mode::Diff {
+                app.content = ContentState::Empty;
+            }
+            app.request_status();
+        }
         Action::CycleSort => {
             app.change_sort = app.change_sort.next();
             app.rebuild_change_tree();
@@ -513,8 +521,8 @@ pub fn on_task(app: &mut App, result: TaskResult) {
                     app.head = Some(status.head);
                     app.rebuild_change_tree();
                     app.apply_status_to_fs_tree();
+                    // 選択は rebuild_change_tree が復元済み。無ければ先頭が選ばれている
                     if app.mode == Mode::Diff && app.content_is_empty() {
-                        app.tree().select_first();
                         app.request_content();
                     }
                 }

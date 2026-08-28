@@ -56,9 +56,9 @@ impl Pool {
 
 fn handle(ctx: &WorkerCtx, request: TaskRequest) -> TaskResult {
     match request {
-        TaskRequest::ScanStatus { generation } => TaskResult::Status {
+        TaskRequest::ScanStatus { generation, spec } => TaskResult::Status {
             generation,
-            outcome: scan_status(ctx).map_err(|e| format!("{e:#}")),
+            outcome: scan_status(ctx, spec).map_err(|e| format!("{e:#}")),
         },
         TaskRequest::ReadDir {
             generation,
@@ -79,8 +79,12 @@ fn handle(ctx: &WorkerCtx, request: TaskRequest) -> TaskResult {
             outcome: load_text(ctx, &abs).map_err(|e| format!("{e:#}")),
             path,
         },
-        TaskRequest::ComputeDiff { generation, change } => {
-            let outcome = compute_diff(ctx, &change).map_err(|e| format!("{e:#}"));
+        TaskRequest::ComputeDiff {
+            generation,
+            change,
+            spec,
+        } => {
+            let outcome = compute_diff(ctx, &change, spec).map_err(|e| format!("{e:#}"));
             TaskResult::Diff {
                 generation,
                 change,
@@ -103,13 +107,13 @@ fn handle(ctx: &WorkerCtx, request: TaskRequest) -> TaskResult {
     }
 }
 
-fn scan_status(ctx: &WorkerCtx) -> anyhow::Result<StatusOutcome> {
+fn scan_status(ctx: &WorkerCtx, spec: DiffSpec) -> anyhow::Result<StatusOutcome> {
     let backend = ctx
         .backend
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Git リポジトリではない"))?;
     Ok(StatusOutcome {
-        changes: backend.changes(DiffSpec::WorktreeVsHead)?,
+        changes: backend.changes(spec)?,
         head: backend.head()?,
     })
 }
@@ -124,13 +128,13 @@ fn load_text(ctx: &WorkerCtx, abs: &Path) -> anyhow::Result<TextOutcome> {
     })
 }
 
-fn compute_diff(ctx: &WorkerCtx, change: &FileChange) -> anyhow::Result<Content> {
+fn compute_diff(ctx: &WorkerCtx, change: &FileChange, spec: DiffSpec) -> anyhow::Result<Content> {
     let backend = ctx
         .backend
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Git リポジトリではない"))?;
-    let old = backend.load(Side::Old, change, ctx.max_file_bytes)?;
-    let new = backend.load(Side::New, change, ctx.max_file_bytes)?;
+    let old = backend.load(spec, Side::Old, change, ctx.max_file_bytes)?;
+    let new = backend.load(spec, Side::New, change, ctx.max_file_bytes)?;
     let (old, new) = match (old, new) {
         (Loaded::Unsupported(reason), _) | (_, Loaded::Unsupported(reason)) => {
             return Ok(Content::Unsupported(reason));

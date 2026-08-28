@@ -39,6 +39,7 @@ pub enum Action {
     ToggleUnified,
     ToggleWrap,
     CycleSort,
+    CycleDiffSpec,
 
     StartSearch,
     StartFilter,
@@ -107,6 +108,8 @@ impl KeyMap {
             // 表示形式のトグルはフォーカス位置に関係なく効かせる
             KeyCode::Char('u') if !ctrl => return Action::ToggleUnified,
             KeyCode::Char('w') if !ctrl => return Action::ToggleWrap,
+            // 比較対象の切り替えは tree モードのステータス記号にも効く
+            KeyCode::Char('s') if !ctrl => return Action::CycleDiffSpec,
             KeyCode::Tab => return Action::CycleFocus(1),
             KeyCode::BackTab => return Action::CycleFocus(-1),
             KeyCode::Char('<') => return Action::ResizeTree(-1),
