@@ -42,7 +42,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let constraints = if show_tree {
         vec![
             Constraint::Fill(app.tree_ratio),
-            Constraint::Fill(10 - app.tree_ratio),
+            Constraint::Fill(20 - app.tree_ratio),
         ]
     } else {
         vec![Constraint::Fill(1)]

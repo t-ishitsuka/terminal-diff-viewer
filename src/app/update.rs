@@ -42,7 +42,7 @@ pub fn apply(app: &mut App, action: Action) {
         }
         Action::Reload => reload(app),
         Action::ResizeTree(delta) => {
-            app.tree_ratio = (app.tree_ratio as i16 + delta).clamp(1, 8) as u16;
+            app.tree_ratio = (app.tree_ratio as i16 + delta).clamp(1, 16) as u16;
         }
 
         Action::TreeMove(delta) => {

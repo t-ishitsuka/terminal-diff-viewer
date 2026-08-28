@@ -9,7 +9,7 @@ use crate::ui::theme::Palette;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// 左ペインの比率。右ペインは 10 - tree_ratio。
+    /// 左ペインの比率 (20 分率)。右ペインは 20 - tree_ratio。
     pub tree_ratio: u16,
     pub show_status_bar: bool,
     pub text: TextOpts,
@@ -29,7 +29,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            tree_ratio: 3,
+            tree_ratio: 5,
             show_status_bar: true,
             text: TextOpts::default(),
             full_file: true,
@@ -113,8 +113,8 @@ impl FileConfig {
         let mut cfg = Config::default();
         if let Some(ui) = self.ui {
             if let Some(ratio) = ui.tree_ratio {
-                if !(1..=8).contains(&ratio) {
-                    bail!("ui.tree_ratio は 1〜8 の範囲で指定する (指定値: {ratio})");
+                if !(1..=16).contains(&ratio) {
+                    bail!("ui.tree_ratio は 1〜16 の範囲で指定する (指定値: {ratio})");
                 }
                 cfg.tree_ratio = ratio;
             }
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn out_of_range_tree_ratio_is_reported() {
-        let error = parse("[ui]\ntree_ratio = 9\n").unwrap_err().to_string();
+        let error = parse("[ui]\ntree_ratio = 17\n").unwrap_err().to_string();
         assert!(error.contains("tree_ratio"), "{error}");
     }
 
@@ -240,11 +240,11 @@ mod tests {
         let path = dir.path().join("config.toml");
         std::fs::write(
             &path,
-            "[ui]\ntree_ratio = 5\n[theme]\npalette = \"blue-orange\"\n",
+            "[ui]\ntree_ratio = 8\n[theme]\npalette = \"blue-orange\"\n",
         )
         .unwrap();
         let cfg = Config::load(Some(&path)).unwrap();
-        assert_eq!(cfg.tree_ratio, 5);
+        assert_eq!(cfg.tree_ratio, 8);
         assert_eq!(cfg.palette, Palette::BlueOrange);
     }
 }
