@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
-use gix::bstr::{BString, ByteSlice};
+use gix::bstr::{BStr, BString, ByteSlice};
 
 use super::model::*;
 use super::{DiffSpec, GitBackend};
+use crate::vfs::walker::is_executable;
 
 pub struct GixBackend {
     repo: gix::ThreadSafeRepository,
@@ -106,6 +107,113 @@ impl Acc {
     }
 }
 
+/// index の書き換え。1 ファイル分の stage / unstage をまとめて扱う。
+impl GixBackend {
+    /// index を読み込み、編集し、書き戻す。書き込みは gix がロックを取って行う。
+    fn edit_index(
+        &self,
+        edit: impl FnOnce(&gix::Repository, &mut gix::index::File) -> Result<()>,
+    ) -> Result<()> {
+        let repo = self.repo.to_thread_local();
+        let mut index = (*repo.index_or_empty().context("index を読めない")?).clone();
+        edit(&repo, &mut index)?;
+        index.sort_entries();
+        // エントリを変えるとツリーキャッシュが古くなるため落とす
+        index.remove_tree();
+        index
+            .write(gix::index::write::Options::default())
+            .context("index を書き込めない")?;
+        Ok(())
+    }
+}
+
+fn to_bstring(path: &Path) -> BString {
+    gix::path::into_bstr(path).into_owned()
+}
+
+/// 同じパスのエントリを stage を問わず取り除く。競合中のエントリもまとめて消える。
+fn remove_path(index: &mut gix::index::File, path: &BStr) {
+    index.remove_entries(|_, entry_path, _| entry_path == path);
+}
+
+fn push_entry(
+    index: &mut gix::index::File,
+    path: &BStr,
+    id: gix::ObjectId,
+    mode: gix::index::entry::Mode,
+    stat: gix::index::entry::Stat,
+) {
+    remove_path(index, path);
+    index.dangerously_push_entry(stat, id, gix::index::entry::Flags::empty(), mode, path);
+}
+
+/// 作業ツリーの内容を blob として書き、index のエントリを作り直す。
+fn stage_from_worktree(
+    repo: &gix::Repository,
+    index: &mut gix::index::File,
+    abs: &Path,
+    rela: &BStr,
+) -> Result<()> {
+    let meta = std::fs::symlink_metadata(abs)
+        .with_context(|| format!("{} の情報を取得できない", abs.display()))?;
+    let (id, mode) = if meta.is_symlink() {
+        let target = std::fs::read_link(abs)
+            .with_context(|| format!("{} のリンク先を読めない", abs.display()))?;
+        let id = repo.write_blob(gix::path::into_bstr(target.as_path()).as_ref())?;
+        (id.detach(), gix::index::entry::Mode::SYMLINK)
+    } else {
+        let bytes =
+            std::fs::read(abs).with_context(|| format!("{} を読み込めない", abs.display()))?;
+        let mode = if is_executable(&meta) {
+            gix::index::entry::Mode::FILE_EXECUTABLE
+        } else {
+            gix::index::entry::Mode::FILE
+        };
+        (repo.write_blob(&bytes)?.detach(), mode)
+    };
+    // stat が実体とずれていても内容の比較で救えるが、揃えておけば status が速い
+    let stat = gix::index::fs::Metadata::from_path_no_follow(abs)
+        .ok()
+        .and_then(|m| gix::index::entry::Stat::from_fs(&m).ok())
+        .unwrap_or_default();
+    push_entry(index, rela, id, mode, stat);
+    Ok(())
+}
+
+/// HEAD のエントリで index を上書きする。HEAD に無ければ index からも消す。
+fn restore_from_head(
+    repo: &gix::Repository,
+    index: &mut gix::index::File,
+    rela_path: &Path,
+) -> Result<()> {
+    let rela = to_bstring(rela_path);
+    let entry = match repo.head_tree() {
+        Ok(mut tree) => tree.peel_to_entry_by_path(rela_path)?,
+        // コミットが 1 つも無いリポジトリでは HEAD 側が存在しない
+        Err(_) => None,
+    };
+    match entry {
+        Some(entry) => {
+            let mode = match entry.mode().kind() {
+                gix::object::tree::EntryKind::BlobExecutable => {
+                    gix::index::entry::Mode::FILE_EXECUTABLE
+                }
+                gix::object::tree::EntryKind::Link => gix::index::entry::Mode::SYMLINK,
+                _ => gix::index::entry::Mode::FILE,
+            };
+            // 実体と一致するか分からないので stat は空にし、status 側で内容比較させる
+            push_entry(
+                index,
+                rela.as_ref(),
+                entry.object_id(),
+                mode,
+                gix::index::entry::Stat::default(),
+            );
+        }
+        None => remove_path(index, rela.as_ref()),
+    }
+    Ok(())
+}
 fn to_path(p: &BString) -> PathBuf {
     gix::path::from_bstr(p.as_bstr()).into_owned()
 }
@@ -259,6 +367,34 @@ impl GitBackend for GixBackend {
                 }
             }
         }
+    }
+
+    fn stage(&self, change: &FileChange) -> Result<()> {
+        let workdir = self.workdir.clone();
+        self.edit_index(|repo, index| {
+            // リネームは新パスを足して旧パスを落とす
+            if let Some(old) = &change.old_path {
+                remove_path(index, to_bstring(old).as_ref());
+            }
+            let abs = workdir.join(&change.path);
+            let rela = to_bstring(&change.path);
+            if abs.symlink_metadata().is_ok() {
+                stage_from_worktree(repo, index, &abs, rela.as_ref())
+            } else {
+                // 作業ツリーから消えているなら、削除を index へ反映する
+                remove_path(index, rela.as_ref());
+                Ok(())
+            }
+        })
+    }
+
+    fn unstage(&self, change: &FileChange) -> Result<()> {
+        self.edit_index(|repo, index| {
+            if let Some(old) = &change.old_path {
+                restore_from_head(repo, index, old)?;
+            }
+            restore_from_head(repo, index, &change.path)
+        })
     }
 }
 

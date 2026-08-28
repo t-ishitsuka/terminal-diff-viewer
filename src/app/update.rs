@@ -6,8 +6,9 @@ use super::action::Action;
 use super::state::{
     App, ContentState, DiffView, DisplayRow, Focus, InputKind, Mode, Overlay, TextView,
 };
+use crate::git::DiffSpec;
 use crate::highlight::Highlighted;
-use crate::task::{Content, HighlightTarget, TaskResult, TextOutcome};
+use crate::task::{Content, HighlightTarget, TaskRequest, TaskResult, TextOutcome};
 use crate::vfs::{Node, TreeModel};
 
 pub fn apply(app: &mut App, action: Action) {
@@ -123,6 +124,8 @@ pub fn apply(app: &mut App, action: Action) {
             }
             app.request_status();
         }
+        Action::Stage => stage_selected(app, false),
+        Action::Unstage => stage_selected(app, true),
         Action::CycleSort => {
             app.change_sort = app.change_sort.next();
             app.rebuild_change_tree();
@@ -669,7 +672,30 @@ pub fn on_task(app: &mut App, result: TaskResult) {
                 _ => {}
             }
         }
+
+        TaskResult::Staged {
+            path,
+            unstage,
+            outcome,
+        } => {
+            match outcome {
+                // 成功は一覧の変化で分かるため通知を出さない
+                Ok(()) => refresh_after_index_change(app),
+                Err(error) => {
+                    let op = if unstage { "unstage" } else { "stage" };
+                    app.notice = Some(format!("{} の {op} に失敗: {error}", path.display()));
+                }
+            }
+        }
     }
+}
+
+/// index を書き換えた後の再読み込み。比較対象が index を見るときは差分も作り直す。
+fn refresh_after_index_change(app: &mut App) {
+    if app.mode == Mode::Diff && app.diff_spec != DiffSpec::WorktreeVsHead {
+        app.content = ContentState::Empty;
+    }
+    app.request_status();
 }
 
 /// 可視範囲ぶんと全文の結果は順不同で届きうる。色付け済みの行数が多い方を残す。
@@ -697,4 +723,19 @@ impl App {
     fn content_is_empty(&self) -> bool {
         matches!(self.content, ContentState::Empty)
     }
+}
+
+/// 選択中のファイルを stage / unstage する。変更が無いファイルでは何もしない。
+fn stage_selected(app: &mut App, unstage: bool) {
+    if app.backend.is_none() {
+        return;
+    }
+    let Some(path) = app.tree().selected_node().map(|n| n.path.clone()) else {
+        return;
+    };
+    let Some(change) = app.changes.find(&path).cloned() else {
+        app.notice = Some(format!("{} に変更がない", path.display()));
+        return;
+    };
+    app.pool.submit(TaskRequest::Stage { change, unstage });
 }

@@ -91,6 +91,14 @@ fn handle(ctx: &WorkerCtx, request: TaskRequest) -> TaskResult {
                 outcome,
             }
         }
+        TaskRequest::Stage { change, unstage } => {
+            let outcome = stage(ctx, &change, unstage).map_err(|e| format!("{e:#}"));
+            TaskResult::Staged {
+                path: change.path,
+                unstage,
+                outcome,
+            }
+        }
         TaskRequest::Highlight {
             generation,
             target,
@@ -145,4 +153,16 @@ fn compute_diff(ctx: &WorkerCtx, change: &FileChange, spec: DiffSpec) -> anyhow:
     Ok(Content::Ready {
         diff: Box::new(align(old, new)),
     })
+}
+
+fn stage(ctx: &WorkerCtx, change: &FileChange, unstage: bool) -> anyhow::Result<()> {
+    let backend = ctx
+        .backend
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Git リポジトリではない"))?;
+    if unstage {
+        backend.unstage(change)
+    } else {
+        backend.stage(change)
+    }
 }

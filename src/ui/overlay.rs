@@ -34,6 +34,8 @@ const HELP: &[(&str, &str)] = &[
     ("T", "階層 / フラット表示トグル (diff)"),
     ("S", "並び順トグル: パス / 変更種別 (diff)"),
     ("s", "比較対象トグル: 作業ツリー / staged / index"),
+    ("a", "選択中のファイルを stage"),
+    ("U", "選択中のファイルを unstage"),
 ];
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {

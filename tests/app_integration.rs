@@ -950,3 +950,127 @@ fn staged_diff_reads_the_index_contents() {
         "index を旧側にしていない"
     );
 }
+
+/// stage / unstage の検証用。変更・追加・削除・リネームを一度に含める。
+fn setup_stage_ops_repo(root: &Path) {
+    git(root, &["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("modified.txt"), "v1\n").unwrap();
+    std::fs::write(root.join("deleted.txt"), "v1\n").unwrap();
+    std::fs::write(root.join("renamed-from.txt"), "content of a renamed file\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "init"]);
+
+    std::fs::write(root.join("modified.txt"), "v2\n").unwrap();
+    std::fs::remove_file(root.join("deleted.txt")).unwrap();
+    std::fs::write(root.join("added.txt"), "new\n").unwrap();
+    std::fs::rename(root.join("renamed-from.txt"), root.join("renamed-to.txt")).unwrap();
+}
+
+fn porcelain(dir: &Path) -> Vec<String> {
+    let mut lines: Vec<String> = git_output(dir, &["status", "--porcelain"])
+        .lines()
+        .map(str::to_string)
+        .collect();
+    lines.sort();
+    lines
+}
+
+fn select_path(h: &mut Harness, path: &str) {
+    // 選択は末尾で止まるため、先頭から順に探す
+    h.act(Action::TreeFirst);
+    for _ in 0..h.app.change_tree.visible_len() {
+        if h.app
+            .change_tree
+            .selected_node()
+            .is_some_and(|n| n.path == Path::new(path))
+        {
+            return;
+        }
+        h.act(Action::TreeMove(1));
+    }
+    panic!("{path} を選択できない");
+}
+
+fn run_index_op(h: &mut Harness, action: Action) {
+    let before = h.app.status_generation;
+    h.act(action);
+    h.pump_until("index 反映後の status", |app| {
+        app.status_generation > before && !app.scanning
+    });
+}
+
+#[test]
+fn stage_matches_git_for_every_change_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_stage_ops_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+    h.act(Action::SetMode(Mode::Diff));
+    h.pump_until("差分の計算", |app| {
+        !matches!(&app.content, ContentState::Loading { .. })
+    });
+
+    let paths: Vec<String> = h
+        .app
+        .changes
+        .files
+        .iter()
+        .map(|c| c.path.display().to_string())
+        .collect();
+    assert!(
+        paths.contains(&"renamed-to.txt".to_string()),
+        "リネーム先が一覧にない: {paths:?}"
+    );
+    for path in &paths {
+        select_path(&mut h, path);
+        run_index_op(&mut h, Action::Stage);
+    }
+
+    // 同じ変更を git add -A で作った結果と突き合わせる
+    let expected = {
+        let dir2 = tempfile::tempdir().unwrap();
+        setup_stage_ops_repo(dir2.path());
+        git(dir2.path(), &["add", "-A"]);
+        porcelain(dir2.path())
+    };
+    assert_eq!(porcelain(dir.path()), expected, "git add -A と一致しない");
+}
+
+#[test]
+fn unstage_restores_the_index_to_head() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_stage_ops_repo(dir.path());
+    git(dir.path(), &["add", "-A"]);
+    let staged = porcelain(dir.path());
+
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+    h.act(Action::SetMode(Mode::Diff));
+    h.pump_until("差分の計算", |app| {
+        !matches!(&app.content, ContentState::Loading { .. })
+    });
+
+    let paths: Vec<String> = h
+        .app
+        .changes
+        .files
+        .iter()
+        .map(|c| c.path.display().to_string())
+        .collect();
+    for path in &paths {
+        select_path(&mut h, path);
+        run_index_op(&mut h, Action::Unstage);
+    }
+
+    let expected = {
+        let dir2 = tempfile::tempdir().unwrap();
+        setup_stage_ops_repo(dir2.path());
+        porcelain(dir2.path())
+    };
+    assert_ne!(staged, expected, "前提: stage 前後で状態が違う");
+    assert_eq!(
+        porcelain(dir.path()),
+        expected,
+        "unstage 後が git reset 相当になっていない"
+    );
+}

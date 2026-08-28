@@ -33,6 +33,11 @@ pub enum TaskRequest {
         change: FileChange,
         spec: DiffSpec,
     },
+    /// index の書き換え。unstage が true なら HEAD の内容へ戻す。
+    Stage {
+        change: FileChange,
+        unstage: bool,
+    },
     /// 内容が出た後に走らせる色付け。重いので本文の表示を待たせない。
     Highlight {
         generation: u64,
@@ -97,6 +102,11 @@ pub enum TaskResult {
         generation: u64,
         target: HighlightTarget,
         highlight: Option<Arc<Highlighted>>,
+    },
+    Staged {
+        path: PathBuf,
+        unstage: bool,
+        outcome: Result<(), String>,
     },
 }
 

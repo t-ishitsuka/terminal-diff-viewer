@@ -148,6 +148,7 @@ pub struct BlobContent {
 | index 側の内容 | `Repository::index()` の `entry_by_path` で blob の id を引き、`find_object` で読む |
 | 作業ツリー側の内容 | ファイルシステムから直接読む |
 | 未追跡ファイル | `index_worktree` の untracked 項目。HEAD 側は空として扱う |
+| stage / unstage | index を `File::at` 相当で読み、エントリを差し替えて `File::write` で書き戻す。書き込みは gix が `index.lock` を取って行う |
 
 `tree_index` (HEAD↔index) と `index_worktree` (index↔作業ツリー) を統合して 1 つの `ChangeKind` に落とし込む規則:
 
@@ -172,6 +173,15 @@ pub struct BlobContent {
 | WorktreeVsHead | HEAD のツリー | 作業ツリー |
 | StagedVsHead | HEAD のツリー | index |
 | WorktreeVsIndex | index | 作業ツリー |
+
+index を書き換える操作 (stage / unstage) は次の手順で行う。エントリを変えるとツリーキャッシュが古くなるため、書き戻す前に落とす。
+
+1. index を所有権のあるコピーとして読む
+2. 対象パスのエントリを stage を問わず取り除く
+3. stage なら作業ツリーの内容を blob として書き、モードと stat を付けてエントリを積む。unstage なら HEAD のエントリを積む (HEAD に無ければ積まない)
+4. `sort_entries` で並びを戻し、ツリーキャッシュを落として書き戻す
+
+作業ツリーのバイトをそのまま blob にするため、`.gitattributes` の clean フィルタ (改行変換、Git LFS) は適用されない。
 
 ## 5. 並行処理
 
@@ -200,6 +210,7 @@ pub struct BlobContent {
 | `LoadText` | tree モードでファイル選択 | `BlobContent` |
 | `ComputeDiff` | diff モードでファイル選択 | `AlignedDiff` |
 | `Highlight` | 本文の表示後、可視範囲 → 全文の順 (差分は左右それぞれ) | 行ごとのスタイル |
+| `Stage` | `a` / `U` の押下 | index 書き換えの成否 |
 
 ### 5.3 陳腐化の破棄
 

@@ -24,14 +24,15 @@ pub struct DirEntry {
     pub kind: EntryKind,
 }
 
+/// 実行ビットの判定。index のモード決定でも使う。
 #[cfg(unix)]
-fn is_executable(metadata: &std::fs::Metadata) -> bool {
+pub fn is_executable(metadata: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
     metadata.permissions().mode() & 0o111 != 0
 }
 
 #[cfg(not(unix))]
-fn is_executable(_metadata: &std::fs::Metadata) -> bool {
+pub fn is_executable(_metadata: &std::fs::Metadata) -> bool {
     false
 }
 

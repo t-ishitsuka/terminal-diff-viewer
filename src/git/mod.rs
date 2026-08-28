@@ -56,4 +56,8 @@ pub trait GitBackend: Send + Sync {
         change: &FileChange,
         max_bytes: u64,
     ) -> anyhow::Result<Loaded>;
+    /// index を作業ツリーの内容に合わせる。
+    fn stage(&self, change: &FileChange) -> anyhow::Result<()>;
+    /// index を HEAD の内容に戻す。
+    fn unstage(&self, change: &FileChange) -> anyhow::Result<()>;
 }

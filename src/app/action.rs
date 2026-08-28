@@ -40,6 +40,8 @@ pub enum Action {
     ToggleWrap,
     CycleSort,
     CycleDiffSpec,
+    Stage,
+    Unstage,
 
     StartSearch,
     StartFilter,
@@ -143,6 +145,8 @@ impl KeyMap {
             KeyCode::Char('I') => Action::ToggleIgnored,
             KeyCode::Char('T') => Action::ToggleHierarchy,
             KeyCode::Char('S') => Action::CycleSort,
+            KeyCode::Char('a') => Action::Stage,
+            KeyCode::Char('U') => Action::Unstage,
             KeyCode::Char('f') | KeyCode::Char('/') => Action::StartFilter,
             _ => Action::None,
         }

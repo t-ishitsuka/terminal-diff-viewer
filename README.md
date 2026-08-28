@@ -32,6 +32,7 @@ nix build              # Nix パッケージとしてビルド
 | `u` / `w` | side-by-side / unified 切替  行折り返しトグル |
 | `I` / `T` / `S` | ignore 表示 / 階層表示 / 並び順 (パス・変更種別) のトグル |
 | `s` | 比較対象のトグル (作業ツリー↔HEAD / staged↔HEAD / 作業ツリー↔index) |
+| `a` / `U` | 選択中のファイルを stage / unstage (ファイル単位) |
 | `r` | リロード |
 | `?` / `q` | ヘルプ / 終了 |
 
@@ -105,7 +106,7 @@ syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定�
 | 項目 | 内容 |
 | --- | --- |
 | 比較対象の切り替え (実装済み) | 作業ツリー vs HEAD / staged vs HEAD / 作業ツリー vs index |
-| stage / unstage | ファイル単位のみ。commit は入れない |
+| stage / unstage (実装済み) | ファイル単位のみ。commit は入れない |
 | 任意 ref 間比較 | `HEAD~3..HEAD` のような指定を起動後に受ける |
 | コミット履歴モード | 左ペインにコミット一覧を出し、選んだコミットの差分を表示 |
 | ファイル変更の自動追従 | 作業ツリーを監視して自動更新。既定 ON |
@@ -115,7 +116,7 @@ syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定�
 ## 開発
 
 ```sh
-cargo test                 # 単体 56 + 統合 22
+cargo test                 # 単体 56 + 統合 24
 cargo clippy --all-targets
 nix build                  # サンドボックス内でテストごとビルド
 
