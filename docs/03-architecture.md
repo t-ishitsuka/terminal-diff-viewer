@@ -191,7 +191,7 @@ pub struct BlobContent {
 | `ReadDir` | ディレクトリ展開 | 子ノード一覧 |
 | `LoadText` | tree モードでファイル選択 | `BlobContent` |
 | `ComputeDiff` | diff モードでファイル選択 | `AlignedDiff` |
-| `Highlight` | 描画対象範囲が確定した後 | 行範囲のスタイル |
+| `Highlight` | 本文の表示後 (差分は左右それぞれ) | 行ごとのスタイル |
 
 ### 5.3 陳腐化の破棄
 
@@ -258,4 +258,4 @@ palette = "red-green"       # または "blue-orange"
 syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定できる
 ```
 
-キーマップの上書きは未実装。必要になった時点で `[keys]` を追加する。
+キーマップの上書きは設けない ([01](01-requirements.md) §4.2)。利用者が単独で既定のキーで足りるため、`[keys]` は追加しない。

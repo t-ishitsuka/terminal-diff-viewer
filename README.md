@@ -77,7 +77,6 @@ syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定�
 | 検索 (内容) / 絞り込み (ファイル名) | 実装済み |
 | 設定ファイル / Nix パッケージ | 実装済み |
 | バイナリ・巨大ファイル・CRLF・末尾改行欠落の扱い | 実装済み |
-| キーマップの設定上書き | 未実装 |
 | 行のクリップボードコピー (`y`、OSC 52) | 未実装 |
 
 詳細は [docs/06-implementation-plan.md](docs/06-implementation-plan.md) の進捗表を参照。
@@ -107,9 +106,12 @@ syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定�
 ## 開発
 
 ```sh
-cargo test                 # 単体 50 + 統合 14
+cargo test                 # 単体 53 + 統合 19
 cargo clippy --all-targets
 nix build                  # サンドボックス内でテストごとビルド
+
+# 性能計測 (NFR-01 / NFR-02)。環境依存のため既定では走らない
+cargo test --release --test perf -- --ignored --nocapture
 ```
 
 MSRV は 1.88 (let-chains を使うため)。統合テストは一時ディレクトリに実 Git リポジトリを作り、`git` コマンドの結果と照合する。
