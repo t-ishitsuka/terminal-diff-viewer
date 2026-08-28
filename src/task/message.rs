@@ -26,13 +26,28 @@ pub enum TaskRequest {
         generation: u64,
         path: PathBuf,
         abs: PathBuf,
-        highlight: HighlightOptions,
     },
     ComputeDiff {
         generation: u64,
         change: FileChange,
-        highlight: HighlightOptions,
     },
+    /// 内容が出た後に走らせる色付け。重いので本文の表示を待たせない。
+    Highlight {
+        generation: u64,
+        target: HighlightTarget,
+        path: PathBuf,
+        table: LineTable,
+        theme: String,
+        max_lines: usize,
+    },
+}
+
+/// 色付け結果の適用先。差分は左右を別々に色付けする。
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum HighlightTarget {
+    Text,
+    DiffOld,
+    DiffNew,
 }
 
 #[derive(Clone, Debug)]
@@ -43,20 +58,13 @@ pub struct StatusOutcome {
 
 #[derive(Clone, Debug)]
 pub enum Content {
-    Ready {
-        diff: Box<AlignedDiff>,
-        old_highlight: Option<Arc<Highlighted>>,
-        new_highlight: Option<Arc<Highlighted>>,
-    },
+    Ready { diff: Box<AlignedDiff> },
     Unsupported(UnsupportedReason),
 }
 
 #[derive(Clone, Debug)]
 pub enum TextOutcome {
-    Ready {
-        table: LineTable,
-        highlight: Option<Arc<Highlighted>>,
-    },
+    Ready { table: LineTable },
     Unsupported(UnsupportedReason),
 }
 
@@ -80,6 +88,11 @@ pub enum TaskResult {
         generation: u64,
         change: FileChange,
         outcome: Result<Content, String>,
+    },
+    Highlight {
+        generation: u64,
+        target: HighlightTarget,
+        highlight: Option<Arc<Highlighted>>,
     },
 }
 

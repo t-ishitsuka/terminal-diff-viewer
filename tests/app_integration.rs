@@ -322,6 +322,19 @@ fn syntax_highlight_is_applied_to_diff() {
     let mut h = Harness::new(dir.path(), 120, 30);
     open_main_rs(&mut h);
 
+    // 本文は色付けを待たずに出る
+    let ContentState::Diff(view) = &h.app.content else {
+        panic!("差分が表示されていない");
+    };
+    assert!(
+        view.new_highlight.is_none(),
+        "色付けが本文の表示をブロックしている"
+    );
+
+    h.pump_until(
+        "色付け",
+        |app| matches!(&app.content, ContentState::Diff(v) if v.new_highlight.is_some()),
+    );
     let ContentState::Diff(view) = &h.app.content else {
         panic!("差分が表示されていない");
     };

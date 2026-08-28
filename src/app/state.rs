@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::diff::{AlignedDiff, InlineSpans, LineTable, RowKind, inline_diff};
 use crate::git::{ChangeKind, ChangeSet, FileChange, GitBackend, HeadInfo, UnsupportedReason};
 use crate::highlight::Highlighted;
-use crate::task::{Pool, TaskRequest};
+use crate::task::{HighlightTarget, Pool, TaskRequest};
 use crate::vfs::{Node, TreeModel};
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -142,19 +142,12 @@ pub struct DiffView {
 }
 
 impl DiffView {
-    pub fn new(
-        change: FileChange,
-        diff: AlignedDiff,
-        old_highlight: Option<Arc<Highlighted>>,
-        new_highlight: Option<Arc<Highlighted>>,
-        folded: bool,
-        context: usize,
-    ) -> Self {
+    pub fn new(change: FileChange, diff: AlignedDiff, folded: bool, context: usize) -> Self {
         let mut view = Self {
             change,
             diff,
-            old_highlight,
-            new_highlight,
+            old_highlight: None,
+            new_highlight: None,
             folded,
             display: Vec::new(),
             expanded_gaps: HashSet::new(),
@@ -442,6 +435,27 @@ impl App {
             .then(|| (self.cfg.syntax_theme.clone(), self.cfg.max_highlight_lines))
     }
 
+    /// 本文が届いた後に色付けを依頼する。5000 行規模では色付けが差分計算より
+    /// 2 桁重いため、素のテキストを先に出して色は後から重ねる。
+    pub fn request_highlight(
+        &self,
+        generation: u64,
+        target: HighlightTarget,
+        path: PathBuf,
+        table: LineTable,
+    ) {
+        let Some((theme, max_lines)) = self.highlight_options() else {
+            return;
+        };
+        self.pool.submit(TaskRequest::Highlight {
+            generation,
+            target,
+            path,
+            table,
+            theme,
+            max_lines,
+        });
+    }
     /// ツリーの選択に応じて右ペインの読み込みを依頼する。
     /// 世代番号を進めることで、押しっぱなしの移動中に届く古い結果を捨てられる。
     pub fn request_content(&mut self) {
@@ -454,7 +468,6 @@ impl App {
             return;
         }
         let generation = self.next_generation();
-        let highlight = self.highlight_options();
         self.search.clear();
         match self.mode {
             Mode::Tree => {
@@ -466,7 +479,6 @@ impl App {
                     generation,
                     path: node.path,
                     abs,
-                    highlight,
                 });
             }
             Mode::Diff => {
@@ -477,11 +489,8 @@ impl App {
                 self.content = ContentState::Loading {
                     path: node.path.clone(),
                 };
-                self.pool.submit(TaskRequest::ComputeDiff {
-                    generation,
-                    change,
-                    highlight,
-                });
+                self.pool
+                    .submit(TaskRequest::ComputeDiff { generation, change });
             }
         }
     }

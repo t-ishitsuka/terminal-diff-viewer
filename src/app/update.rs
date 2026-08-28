@@ -5,7 +5,7 @@ use super::action::Action;
 use super::state::{
     App, ContentState, DiffView, DisplayRow, Focus, InputKind, Mode, Overlay, TextView,
 };
-use crate::task::{Content, TaskResult, TextOutcome};
+use crate::task::{Content, HighlightTarget, TaskResult, TextOutcome};
 use crate::vfs::{Node, TreeModel};
 
 pub fn apply(app: &mut App, action: Action) {
@@ -581,11 +581,17 @@ pub fn on_task(app: &mut App, result: TaskResult) {
                 return;
             }
             app.content = match outcome {
-                Ok(TextOutcome::Ready { table, highlight }) => {
+                Ok(TextOutcome::Ready { table }) => {
+                    app.request_highlight(
+                        generation,
+                        HighlightTarget::Text,
+                        path.clone(),
+                        table.clone(),
+                    );
                     ContentState::Text(Box::new(TextView {
                         path,
                         table,
-                        highlight,
+                        highlight: None,
                         offset: 0,
                         hscroll: 0,
                     }))
@@ -606,22 +612,50 @@ pub fn on_task(app: &mut App, result: TaskResult) {
             }
             let path = change.path.clone();
             app.content = match outcome {
-                Ok(Content::Ready {
-                    diff,
-                    old_highlight,
-                    new_highlight,
-                }) => ContentState::Diff(Box::new(DiffView::new(
-                    change,
-                    *diff,
-                    old_highlight,
-                    new_highlight,
-                    !app.cfg.full_file,
-                    app.cfg.fold_context,
-                ))),
+                Ok(Content::Ready { diff }) => {
+                    app.request_highlight(
+                        generation,
+                        HighlightTarget::DiffOld,
+                        change.old_lookup_path().clone(),
+                        diff.old.clone(),
+                    );
+                    app.request_highlight(
+                        generation,
+                        HighlightTarget::DiffNew,
+                        change.path.clone(),
+                        diff.new.clone(),
+                    );
+                    ContentState::Diff(Box::new(DiffView::new(
+                        change,
+                        *diff,
+                        !app.cfg.full_file,
+                        app.cfg.fold_context,
+                    )))
+                }
                 Ok(Content::Unsupported(reason)) => ContentState::Unsupported { path, reason },
                 Err(error) => ContentState::Failed { path, error },
             };
             reapply_search(app);
+        }
+
+        TaskResult::Highlight {
+            generation,
+            target,
+            highlight,
+        } => {
+            if generation != app.generation {
+                return;
+            }
+            match (&mut app.content, target) {
+                (ContentState::Text(view), HighlightTarget::Text) => view.highlight = highlight,
+                (ContentState::Diff(view), HighlightTarget::DiffOld) => {
+                    view.old_highlight = highlight;
+                }
+                (ContentState::Diff(view), HighlightTarget::DiffNew) => {
+                    view.new_highlight = highlight;
+                }
+                _ => {}
+            }
         }
     }
 }
