@@ -117,7 +117,7 @@ pub trait GitBackend: Send + Sync {
 /// 差分の比較対象。v1 は WorktreeVsHead のみを実装する。
 pub enum DiffSpec {
     WorktreeVsHead,
-    // v2 候補
+    // v2 で追加 (06 §5 の M6 / M8)
     // StagedVsHead,
     // WorktreeVsIndex,
     // Range { from: Rev, to: Rev },
@@ -258,4 +258,4 @@ palette = "red-green"       # または "blue-orange"
 syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定できる
 ```
 
-キーマップの上書きは設けない ([01](01-requirements.md) §4.2)。利用者が単独で既定のキーで足りるため、`[keys]` は追加しない。
+キーマップの上書きは設けない ([01](01-requirements.md) §4.3)。利用者が単独で既定のキーで足りるため、`[keys]` は追加しない。
