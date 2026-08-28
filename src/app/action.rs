@@ -36,6 +36,9 @@ pub enum Action {
     PrevFile,
     ToggleFold,
     ExpandGap,
+    ToggleUnified,
+    ToggleWrap,
+    CycleSort,
 
     StartSearch,
     StartFilter,
@@ -101,6 +104,9 @@ impl KeyMap {
             KeyCode::Char('t') => return Action::SetMode(Mode::Tree),
             KeyCode::Char('d') if !ctrl => return Action::SetMode(Mode::Diff),
             KeyCode::Char('r') => return Action::Reload,
+            // 表示形式のトグルはフォーカス位置に関係なく効かせる
+            KeyCode::Char('u') if !ctrl => return Action::ToggleUnified,
+            KeyCode::Char('w') if !ctrl => return Action::ToggleWrap,
             KeyCode::Tab => return Action::CycleFocus(1),
             KeyCode::BackTab => return Action::CycleFocus(-1),
             KeyCode::Char('<') => return Action::ResizeTree(-1),
@@ -133,6 +139,7 @@ impl KeyMap {
             KeyCode::Char('z') => Action::TreeToggle,
             KeyCode::Char('I') => Action::ToggleIgnored,
             KeyCode::Char('T') => Action::ToggleHierarchy,
+            KeyCode::Char('S') => Action::CycleSort,
             KeyCode::Char('f') | KeyCode::Char('/') => Action::StartFilter,
             _ => Action::None,
         }

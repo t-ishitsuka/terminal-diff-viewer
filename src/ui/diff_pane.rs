@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use super::render::spans;
-use super::text::{Marks, TextOpts, render_line};
+use super::text::{Marks, Segment, TextOpts, render_line, wrap_line};
 use super::theme::Theme;
 use super::tree_pane::gutter_width;
 use crate::app::{App, ContentState, DiffView, DisplayRow, SearchState};
@@ -50,6 +50,7 @@ fn build_rows<'a>(
 ) -> Option<Rendered<'a>> {
     let opts = app.cfg.text;
     let inline_enabled = app.cfg.inline_words;
+    let wrap = app.wrap;
     let height = app.content_height;
     if height == 0 {
         return None;
@@ -60,7 +61,13 @@ fn build_rows<'a>(
         return None;
     };
     let total = view.display_len();
-    view.offset = view.offset.min(total.saturating_sub(height));
+    // 折り返し中は 1 行が複数行を占めるため、末尾行まで送れるようにする
+    let last = if wrap {
+        total.saturating_sub(1)
+    } else {
+        total.saturating_sub(height)
+    };
+    view.offset = view.offset.min(last);
 
     let old_width = gutter_width(view.diff.old.len());
     let new_width = gutter_width(view.diff.new.len());
@@ -69,10 +76,12 @@ fn build_rows<'a>(
     let mut left: Vec<Line> = Vec::with_capacity(height);
     let mut right: Vec<Line> = Vec::with_capacity(height);
 
-    for index in view.offset..(view.offset + height).min(total) {
+    let mut index = view.offset;
+    while index < total && left.len() < height {
         let Some(display) = view.display_row(index) else {
             break;
         };
+        index += 1;
         match display {
             DisplayRow::Gap { count, .. } => {
                 let text = format!("⋯ {count} 行省略 (Enter で展開)");
@@ -89,13 +98,20 @@ fn build_rows<'a>(
                     theme,
                     opts,
                     hscroll,
+                    wrap,
                     inline: &inline,
                     search: &search,
                     row,
                 };
                 if side_by_side {
-                    left.push(side_line(&ctx, pair, Side::Old, old_width, left_width));
-                    right.push(side_line(&ctx, pair, Side::New, new_width, right_width));
+                    let mut old = side_lines(&ctx, pair, Side::Old, old_width, left_width);
+                    let mut new = side_lines(&ctx, pair, Side::New, new_width, right_width);
+                    // 折り返しで行数がずれてもペアの対応が崩れないよう揃える
+                    let rows = old.lines.len().max(new.lines.len());
+                    old.pad_to(rows, left_width);
+                    new.pad_to(rows, right_width);
+                    left.extend(old.lines);
+                    right.extend(new.lines);
                 } else {
                     unified_lines(&ctx, pair, old_width.max(new_width), left_width, &mut left);
                 }
@@ -110,18 +126,37 @@ struct RowCtx<'a> {
     theme: &'a Theme,
     opts: TextOpts,
     hscroll: usize,
+    wrap: bool,
     inline: &'a InlineSpans,
     search: &'a SearchState,
     row: u32,
 }
 
-fn side_line<'a>(
+/// 片側 1 行分の描画結果。折り返しで複数行になることがある。
+struct SideRender<'a> {
+    lines: Vec<Line<'a>>,
+    /// 対向側に合わせて行数を足すときの余白スタイル。
+    filler: Style,
+}
+
+impl<'a> SideRender<'a> {
+    fn pad_to(&mut self, rows: usize, width: u16) {
+        while self.lines.len() < rows {
+            self.lines.push(Line::from(Span::styled(
+                " ".repeat(width as usize),
+                self.filler,
+            )));
+        }
+    }
+}
+
+fn side_lines<'a>(
     ctx: &RowCtx<'_>,
     pair: RowPair,
     side: Side,
     num_width: usize,
     width: u16,
-) -> Line<'a> {
+) -> SideRender<'a> {
     let theme = ctx.theme;
     let right = side == Side::New;
     let (cell, table, highlight, inline_ranges, marker, bg, fg, inline_bg, gutter) = match side {
@@ -158,10 +193,11 @@ fn side_line<'a>(
     let width = width as usize;
     let content_width = width.saturating_sub(num_width + 2);
     let Cell::Line(index) = cell else {
-        return Line::from(Span::styled(
-            " ".repeat(width),
-            Style::new().bg(theme.pad_bg),
-        ));
+        let pad = Style::new().bg(theme.pad_bg);
+        return SideRender {
+            lines: vec![Line::from(Span::styled(" ".repeat(width), pad))],
+            filler: pad,
+        };
     };
 
     let changed = pair.kind != RowKind::Context;
@@ -179,18 +215,17 @@ fn side_line<'a>(
         search: ctx.search.ranges(ctx.row, right),
         colors: highlight.map_or(&[][..], |h| h.line(index)),
     };
-    let segments = render_line(&text, marks, ctx.opts, ctx.hscroll, content_width);
-
-    let mut out = vec![
-        Span::styled(format!("{:>num_width$}", index + 1), gutter_style),
-        Span::styled(marker.to_string(), gutter_style),
-        Span::styled(" ", base),
-    ];
-    let used: usize = segments
-        .iter()
-        .map(|s| super::text::display_width(&s.text, ctx.opts))
-        .sum();
-    out.extend(spans(segments, base, inline_bg, theme));
+    let chunks: Vec<Vec<Segment>> = if ctx.wrap {
+        wrap_line(&text, marks, ctx.opts, content_width)
+    } else {
+        vec![render_line(
+            &text,
+            marks,
+            ctx.opts,
+            ctx.hscroll,
+            content_width,
+        )]
+    };
 
     let mut suffix = String::new();
     if table.has_cr(index) {
@@ -199,18 +234,50 @@ fn side_line<'a>(
     if table.is_last_without_newline(index) {
         suffix.push_str(NO_NEWLINE_MARK);
     }
-    let suffix_width = suffix.chars().count();
-    if !suffix.is_empty() {
-        out.push(Span::styled(suffix, theme.dim.patch(base)));
-    }
-    // 変更行は行末まで着色し、範囲を目で追えるようにする
-    if changed {
-        let filled = used + suffix_width;
-        if filled < content_width {
-            out.push(Span::styled(" ".repeat(content_width - filled), base));
+
+    let last = chunks.len().saturating_sub(1);
+    let mut lines = Vec::with_capacity(chunks.len());
+    for (i, segments) in chunks.into_iter().enumerate() {
+        // 折り返しの 2 行目以降は行番号とマーカーを空にして桁を保つ
+        let number = if i == 0 {
+            format!("{:>num_width$}", index + 1)
+        } else {
+            " ".repeat(num_width)
+        };
+        let mark = if i == 0 { marker } else { ' ' };
+        let mut out = vec![
+            Span::styled(number, gutter_style),
+            Span::styled(mark.to_string(), gutter_style),
+            Span::styled(" ", base),
+        ];
+        let used: usize = segments
+            .iter()
+            .map(|s| super::text::display_width(&s.text, ctx.opts))
+            .sum();
+        out.extend(spans(segments, base, inline_bg, theme));
+
+        let mut suffix_width = 0;
+        if i == last && !suffix.is_empty() {
+            suffix_width = suffix.chars().count();
+            out.push(Span::styled(suffix.clone(), theme.dim.patch(base)));
         }
+        // 変更行は行末まで着色し、範囲を目で追えるようにする
+        if changed {
+            let filled = used + suffix_width;
+            if filled < content_width {
+                out.push(Span::styled(" ".repeat(content_width - filled), base));
+            }
+        }
+        lines.push(Line::from(out));
     }
-    Line::from(out)
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(" ".repeat(width), base)));
+    }
+
+    SideRender {
+        lines,
+        filler: base,
+    }
 }
 
 fn unified_lines<'a>(
@@ -220,14 +287,13 @@ fn unified_lines<'a>(
     width: u16,
     out: &mut Vec<Line<'a>>,
 ) {
+    let mut push = |side| out.extend(side_lines(ctx, pair, side, num_width, width).lines);
     match pair.kind {
-        RowKind::Context | RowKind::Removed => {
-            out.push(side_line(ctx, pair, Side::Old, num_width, width));
-        }
-        RowKind::Added => out.push(side_line(ctx, pair, Side::New, num_width, width)),
+        RowKind::Context | RowKind::Removed => push(Side::Old),
+        RowKind::Added => push(Side::New),
         RowKind::Changed => {
-            out.push(side_line(ctx, pair, Side::Old, num_width, width));
-            out.push(side_line(ctx, pair, Side::New, num_width, width));
+            push(Side::Old);
+            push(Side::New);
         }
     }
 }

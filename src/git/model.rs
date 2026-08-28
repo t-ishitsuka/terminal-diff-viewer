@@ -21,6 +21,17 @@ impl ChangeKind {
             ChangeKind::Untracked => '?',
         }
     }
+
+    /// 種別順に並べるときの序列。
+    pub fn order(self) -> u8 {
+        match self {
+            ChangeKind::Modified => 0,
+            ChangeKind::Added => 1,
+            ChangeKind::Renamed => 2,
+            ChangeKind::Deleted => 3,
+            ChangeKind::Untracked => 4,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

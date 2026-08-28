@@ -22,6 +22,31 @@ pub enum Focus {
     Content,
 }
 
+/// diff モードのファイル一覧の並び順。
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ChangeSort {
+    /// リポジトリルートからの相対パス順。
+    Path,
+    /// 変更種別ごとにまとめ、同種別内はパス順。
+    Kind,
+}
+
+impl ChangeSort {
+    pub fn next(self) -> Self {
+        match self {
+            ChangeSort::Path => ChangeSort::Kind,
+            ChangeSort::Kind => ChangeSort::Path,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ChangeSort::Path => "パス順",
+            ChangeSort::Kind => "種別順",
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum InputKind {
     /// 内容ペインの検索。
@@ -311,6 +336,11 @@ pub struct App {
     pub tree_ratio: u16,
     pub show_ignored: bool,
     pub hierarchical_changes: bool,
+    pub change_sort: ChangeSort,
+    /// 差分を強制的に unified 表示にする (端末幅による縮退とは独立)。
+    pub unified: bool,
+    /// 内容ペインの行折り返し。
+    pub wrap: bool,
     pub scanning: bool,
     pub should_quit: bool,
     /// ツリー再構築時に展開状態と選択を復元するための保留情報。
@@ -349,6 +379,9 @@ impl App {
             tree_ratio,
             show_ignored: false,
             hierarchical_changes: false,
+            change_sort: ChangeSort::Path,
+            unified: false,
+            wrap: false,
             scanning: false,
             should_quit: false,
             pending_expand: HashSet::new(),
@@ -453,6 +486,20 @@ impl App {
         }
     }
 
+    /// 現在のソート順で並べたファイル一覧。パス順は取得時点で整列済み。
+    fn sorted_changes(&self) -> Vec<&FileChange> {
+        let mut files: Vec<&FileChange> = self.changes.files.iter().collect();
+        if self.change_sort == ChangeSort::Kind {
+            files.sort_by(|a, b| {
+                a.kind
+                    .order()
+                    .cmp(&b.kind.order())
+                    .then_with(|| a.path.cmp(&b.path))
+            });
+        }
+        files
+    }
+
     /// 変更ファイル一覧から diff モード用のツリーを組み直す。
     pub fn rebuild_change_tree(&mut self) {
         let previous = self
@@ -461,10 +508,11 @@ impl App {
             .map(|n| n.path.clone())
             .filter(|p| !p.as_os_str().is_empty());
         let mut tree = TreeModel::new();
+        let files = self.sorted_changes();
 
         if self.hierarchical_changes {
             let mut dirs: HashMap<PathBuf, u32> = HashMap::new();
-            for change in &self.changes.files {
+            for change in &files {
                 let parent_path = change.path.parent().unwrap_or(Path::new(""));
                 let parent = ensure_dir(&mut tree, &mut dirs, parent_path);
                 let depth = tree.node(parent).depth + u16::from(parent != TreeModel::ROOT);
@@ -476,7 +524,7 @@ impl App {
                 tree.set_status(id, Some(change.kind));
             }
         } else {
-            for change in &self.changes.files {
+            for change in &files {
                 let label = change.path.to_string_lossy().into_owned();
                 let id = tree.push_child(
                     TreeModel::ROOT,

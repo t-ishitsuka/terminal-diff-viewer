@@ -105,6 +105,21 @@ pub fn apply(app: &mut App, action: Action) {
         Action::PrevFile => step_change_file(app, -1),
         Action::ToggleFold => toggle_fold(app),
         Action::ExpandGap => expand_gap(app),
+        Action::ToggleUnified => app.unified = !app.unified,
+        Action::ToggleWrap => {
+            app.wrap = !app.wrap;
+            // 折り返し中は横スクロールの意味がないため戻す
+            if app.wrap {
+                reset_hscroll(app);
+            }
+        }
+        Action::CycleSort => {
+            app.change_sort = app.change_sort.next();
+            app.rebuild_change_tree();
+            if app.mode == Mode::Diff {
+                app.request_content();
+            }
+        }
 
         Action::StartSearch => {
             app.overlay = Overlay::Input {
@@ -235,7 +250,13 @@ fn content_len(app: &App) -> usize {
 }
 
 fn set_offset(app: &mut App, value: usize) {
-    let max = content_len(app).saturating_sub(app.content_height.max(1));
+    let len = content_len(app);
+    // 折り返し中は 1 論理行が複数行を占めるため、末尾行まで送れるようにする
+    let max = if app.wrap {
+        len.saturating_sub(1)
+    } else {
+        len.saturating_sub(app.content_height.max(1))
+    };
     let value = value.min(max);
     match &mut app.content {
         ContentState::Text(v) => v.offset = value,
@@ -258,7 +279,18 @@ fn scroll(app: &mut App, delta: isize) {
     set_offset(app, next);
 }
 
+fn reset_hscroll(app: &mut App) {
+    match &mut app.content {
+        ContentState::Text(v) => v.hscroll = 0,
+        ContentState::Diff(v) => v.hscroll = 0,
+        _ => {}
+    }
+}
+
 fn hscroll(app: &mut App, delta: isize) {
+    if app.wrap {
+        return;
+    }
     let target = match &mut app.content {
         ContentState::Text(v) => &mut v.hscroll,
         ContentState::Diff(v) => &mut v.hscroll,

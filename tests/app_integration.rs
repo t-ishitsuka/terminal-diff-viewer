@@ -532,6 +532,140 @@ fn tree_entries_are_colored_by_file_kind() {
     assert_eq!(all.len(), 4, "種別ごとに色が分かれていない: {all:?}");
 }
 
+/// 折り返しの検証用に、1 行が極端に長いファイルだけを持つリポジトリを作る。
+fn setup_long_line_repo(root: &Path) {
+    git(root, &["init", "-q", "-b", "main"]);
+    let long = format!("{}END", "0123456789".repeat(30));
+    std::fs::write(root.join("long.txt"), format!("{long}\n")).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "init"]);
+}
+
+/// 長い行を含む 1 行だけの変更。折り返し時の左右整列を確かめる。
+fn setup_wrapped_diff_repo(root: &Path) {
+    git(root, &["init", "-q", "-b", "main"]);
+    let long = format!("{}TAIL", "abcdefghij".repeat(30));
+    std::fs::write(root.join("w.txt"), format!("head\n{long}\nZZZ\n")).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "init"]);
+    std::fs::write(root.join("w.txt"), "head\nshort\nZZZ\n").unwrap();
+}
+
+#[test]
+fn unified_toggle_puts_both_sides_in_one_column() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    open_main_rs(&mut h);
+
+    // side-by-side では旧行と新行が同じ画面行に並ぶ
+    let side_by_side = h.render();
+    assert!(
+        side_by_side
+            .lines()
+            .any(|l| l.matches("line 10").count() == 2),
+        "左右に同じ行が並んでいない\n{side_by_side}"
+    );
+
+    h.act(Action::ToggleUnified);
+    let unified = h.render();
+    assert!(unified.contains("line 10 changed"), "{unified}");
+    assert!(
+        !unified.lines().any(|l| l.matches("line 10").count() == 2),
+        "unified なのに左右へ分かれている\n{unified}"
+    );
+    assert!(unified.contains("unified"), "状態表示がない\n{unified}");
+}
+
+#[test]
+fn wrap_shows_the_tail_of_a_long_line() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_long_line_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 60, 20);
+    h.pump_until("ルートの読み込み", |app| {
+        app.fs_tree.node_count() > 1
+    });
+    h.act(Action::TreeMove(0));
+    h.pump_until("ファイル読み込み", |app| {
+        matches!(&app.content, ContentState::Text(_))
+    });
+
+    let plain = h.render();
+    assert!(
+        !plain.contains("END"),
+        "折り返し前から行末が見えている\n{plain}"
+    );
+
+    h.act(Action::ToggleWrap);
+    let wrapped = h.render();
+    assert!(
+        wrapped.contains("END"),
+        "折り返しても行末が見えない\n{wrapped}"
+    );
+}
+
+#[test]
+fn wrapped_side_by_side_keeps_rows_aligned() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_wrapped_diff_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+    h.act(Action::SetMode(Mode::Diff));
+    h.pump_until("差分の計算", |app| {
+        matches!(&app.content, ContentState::Diff(_))
+    });
+    h.act(Action::ToggleWrap);
+
+    let screen = h.render();
+    assert!(
+        screen.contains("TAIL"),
+        "長い行が折り返されていない\n{screen}"
+    );
+    // 左が複数行に折り返されても、次の行は左右で同じ画面行に並ぶ
+    let aligned = screen
+        .lines()
+        .filter(|l| l.matches("ZZZ").count() == 2)
+        .count();
+    assert_eq!(aligned, 1, "左右の行がずれている\n{screen}");
+}
+
+#[test]
+fn sort_toggle_groups_changes_by_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+
+    fn order(h: &mut Harness) -> Vec<String> {
+        let ids = h.app.change_tree.visible().to_vec();
+        ids.iter()
+            .map(|id| h.app.change_tree.node(*id).path.display().to_string())
+            .collect()
+    }
+
+    let by_path = vec![
+        "src/added.rs",
+        "src/main.rs",
+        "src/removed.rs",
+        "untracked.txt",
+    ];
+    assert_eq!(order(&mut h), by_path);
+
+    h.act(Action::CycleSort);
+    assert_eq!(
+        order(&mut h),
+        vec![
+            "src/main.rs",    // Modified
+            "src/added.rs",   // Added
+            "src/removed.rs", // Deleted
+            "untracked.txt",  // Untracked
+        ]
+    );
+
+    h.act(Action::CycleSort);
+    assert_eq!(order(&mut h), by_path, "パス順へ戻らない");
+}
+
 /// 変更箇所を 2 つ持つファイル。連続ジャンプの検証に使う。
 fn setup_two_hunk_repo(root: &Path) {
     git(root, &["init", "-q", "-b", "main"]);

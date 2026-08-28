@@ -5,7 +5,7 @@ use ratatui::widgets::Paragraph;
 
 use super::text::fit_width;
 use super::theme::Theme;
-use crate::app::{App, ContentState, InputKind, Mode, Overlay};
+use crate::app::{App, ChangeSort, ContentState, InputKind, Mode, Overlay};
 
 pub fn draw_header(
     frame: &mut Frame,
@@ -107,13 +107,30 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         String::new()
     };
 
+    // 既定と異なる表示状態だけを出す
+    let mut states: Vec<&str> = Vec::new();
+    if app.unified {
+        states.push("unified");
+    }
+    if app.wrap {
+        states.push("折返");
+    }
+    if app.mode == Mode::Diff && app.change_sort != ChangeSort::Path {
+        states.push(app.change_sort.label());
+    }
+    let states = if states.is_empty() {
+        String::new()
+    } else {
+        format!("  [{}]", states.join(" "))
+    };
+
     let hints = match app.mode {
         Mode::Tree => "[Tab] ペイン  [m] diff  [/] 絞込  [?] ヘルプ",
         Mode::Diff => "[]c] 次の変更  [/] 検索  [z] 折畳  [?] ヘルプ",
     };
 
     let text = fit_width(
-        &format!("{branch} ● {changed} 件変更{scanning}   {position}{search}   {hints}"),
+        &format!("{branch} ● {changed} 件変更{scanning}   {position}{search}{states}   {hints}"),
         width,
         opts,
     );

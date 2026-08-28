@@ -79,7 +79,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn draw_content(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, narrow: bool) {
     app.content_height = area.height as usize;
     match &app.content {
-        ContentState::Diff(_) if app.mode == Mode::Diff && !narrow => {
+        ContentState::Diff(_) if app.mode == Mode::Diff && !narrow && !app.unified => {
             diff_pane::draw_side_by_side(frame, area, app, theme);
         }
         ContentState::Diff(_) => diff_pane::draw_unified(frame, area, app, theme),

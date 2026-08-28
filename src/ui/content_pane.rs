@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use super::render::spans;
-use super::text::{Marks, render_line};
+use super::text::{Marks, render_line, wrap_line};
 use super::theme::Theme;
 use super::tree_pane::gutter_width;
 use crate::app::{App, ContentState};
@@ -43,16 +43,24 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     }
 
     let search = &app.search;
+    let wrap = app.wrap;
     let ContentState::Text(view) = &mut app.content else {
         return;
     };
     let total = view.table.len();
-    view.offset = view.offset.min(total.saturating_sub(height));
+    // 折り返し中は 1 行が複数行を占めるため、末尾行まで送れるようにする
+    let last = if wrap {
+        total.saturating_sub(1)
+    } else {
+        total.saturating_sub(height)
+    };
+    view.offset = view.offset.min(last);
 
     let num_width = gutter_width(total);
     let content_width = width.saturating_sub(num_width + 1);
     let mut lines: Vec<Line> = Vec::with_capacity(height);
-    for index in view.offset..(view.offset + height).min(total) {
+    let mut index = view.offset;
+    while index < total && lines.len() < height {
         let raw = view.table.line_display(index as u32);
         let text = String::from_utf8_lossy(raw);
         let colors = view
@@ -64,13 +72,23 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
             colors,
             ..Marks::default()
         };
-        let segments = render_line(&text, marks, opts, view.hscroll, content_width);
-        let mut out = vec![
-            Span::styled(format!("{:>num_width$}", index + 1), theme.gutter),
-            Span::raw(" "),
-        ];
-        out.extend(spans(segments, Style::new(), Color::Reset, theme));
-        lines.push(Line::from(out));
+        let chunks = if wrap {
+            wrap_line(&text, marks, opts, content_width)
+        } else {
+            vec![render_line(&text, marks, opts, view.hscroll, content_width)]
+        };
+        for (i, segments) in chunks.into_iter().enumerate() {
+            // 折り返しの 2 行目以降は行番号を空にして桁を保つ
+            let number = if i == 0 {
+                format!("{:>num_width$}", index + 1)
+            } else {
+                " ".repeat(num_width)
+            };
+            let mut out = vec![Span::styled(number, theme.gutter), Span::raw(" ")];
+            out.extend(spans(segments, Style::new(), Color::Reset, theme));
+            lines.push(Line::from(out));
+        }
+        index += 1;
     }
     frame.render_widget(Paragraph::new(lines), area);
 }

@@ -193,6 +193,29 @@ pub fn render_line(
     out
 }
 
+/// 1 行を幅 `width` ごとに折り返し、画面行ごとのセグメント列を返す。
+/// 全角文字が境界をまたいで欠けないよう、桁ではなく文字の切れ目で分割する。
+pub fn wrap_line(line: &str, marks: Marks<'_>, opts: TextOpts, width: usize) -> Vec<Vec<Segment>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut starts = vec![0usize];
+    let mut col = 0usize;
+    for c in line.chars() {
+        let w = opts.char_width(c, col);
+        let start = *starts.last().expect("先頭は必ずある");
+        // 幅そのものより広い文字は分割できないため、行頭では折り返さない
+        if col > start && col + w > start + width {
+            starts.push(col);
+        }
+        col += w;
+    }
+    starts
+        .into_iter()
+        .map(|start| render_line(line, marks, opts, start, width))
+        .collect()
+}
+
 /// 表示幅が `width` を超える場合に末尾を省略記号へ置き換える。
 pub fn fit_width(s: &str, width: usize, opts: TextOpts) -> String {
     if width == 0 {
@@ -336,5 +359,31 @@ mod tests {
     fn pad_to_uses_display_width() {
         assert_eq!(pad_to("あ", 4, opts()), "あ  ");
         assert_eq!(display_width(&pad_to("あ", 4, opts()), opts()), 4);
+    }
+
+    #[test]
+    fn wrap_splits_a_line_into_screen_rows() {
+        let rows = wrap_line("abcdefg", Marks::default(), opts(), 3);
+        let texts: Vec<String> = rows.iter().map(|r| joined(r)).collect();
+        assert_eq!(texts, vec!["abc", "def", "g"]);
+    }
+
+    #[test]
+    fn wrap_never_drops_a_full_width_char_at_the_boundary() {
+        let rows = wrap_line("あいう", Marks::default(), opts(), 3);
+        let joined_all: String = rows.iter().map(|r| joined(r)).collect();
+        for c in ['あ', 'い', 'う'] {
+            assert_eq!(
+                joined_all.matches(c).count(),
+                1,
+                "{c} が欠けたか重複した: {joined_all:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wrap_of_a_short_line_is_a_single_row() {
+        assert_eq!(wrap_line("abc", Marks::default(), opts(), 10).len(), 1);
+        assert_eq!(wrap_line("", Marks::default(), opts(), 10).len(), 1);
     }
 }
