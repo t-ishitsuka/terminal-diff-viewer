@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::walker::EntryKind;
-use crate::git::ChangeKind;
+use crate::git::FileStatus;
 
 #[derive(Clone, Debug)]
 pub struct Node {
@@ -14,7 +14,7 @@ pub struct Node {
     /// None は未読み込み。ディレクトリの遅延展開に使う。
     pub children: Option<Vec<u32>>,
     pub expanded: bool,
-    pub status: Option<ChangeKind>,
+    pub status: Option<FileStatus>,
 }
 
 impl Node {
@@ -132,7 +132,7 @@ impl TreeModel {
         self.dirty = true;
     }
 
-    pub fn set_status(&mut self, id: u32, status: Option<ChangeKind>) {
+    pub fn set_status(&mut self, id: u32, status: Option<FileStatus>) {
         self.nodes[id as usize].status = status;
     }
 

@@ -215,6 +215,8 @@ impl GixBackend {
                         path: gix::path::from_bstr(location).into_owned(),
                         old_path: source.map(|s| gix::path::from_bstr(s).into_owned()),
                         kind,
+                        index_kind: None,
+                        worktree_kind: None,
                     });
                 }
                 Ok::<_, std::convert::Infallible>(Action::Continue(()))
@@ -468,10 +470,22 @@ impl GitBackend for GixBackend {
             .into_iter()
             .filter_map(|(path, a)| {
                 let kind = a.resolve(spec)?;
+                // 2 桁表示のため、統合表示のときは両側の観測も持たせる
+                let (index_kind, worktree_kind) = match spec {
+                    DiffSpec::WorktreeVsHead => (
+                        a.resolve(&DiffSpec::StagedVsHead),
+                        a.resolve(&DiffSpec::WorktreeVsIndex),
+                    ),
+                    DiffSpec::StagedVsHead => (Some(kind), None),
+                    DiffSpec::WorktreeVsIndex => (None, Some(kind)),
+                    DiffSpec::Range { .. } => (None, None),
+                };
                 Some(FileChange {
                     path: to_path(&path),
                     old_path: a.old_path(spec).map(to_path),
                     kind,
+                    index_kind,
+                    worktree_kind,
                 })
             })
             .collect();

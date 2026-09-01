@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::diff::{AlignedDiff, InlineSpans, LineTable, RowKind, inline_diff};
 use crate::git::{
-    ChangeKind, ChangeSet, CommitInfo, DiffSpec, FileChange, GitBackend, HeadInfo,
+    ChangeSet, CommitInfo, DiffSpec, FileChange, FileStatus, GitBackend, HeadInfo,
     UnsupportedReason,
 };
 use crate::highlight::Highlighted;
@@ -358,6 +358,10 @@ pub struct App {
     /// 作業ツリーの変更を自動で取り込むか。
     pub watch: bool,
     pub scanning: bool,
+    /// 走査が自動追従由来か。表示を点滅させないために持つ。
+    pub quiet_scan: bool,
+    /// 自動追従で読み直すときに持ち越す表示位置 (パス, 縦, 横)。
+    pub keep_position: Option<(PathBuf, usize, usize)>,
     pub should_quit: bool,
     /// ツリー再構築時に展開状態と選択を復元するための保留情報。
     pub pending_expand: HashSet<PathBuf>,
@@ -408,6 +412,8 @@ impl App {
             wrap: false,
             watch: cfg_watch,
             scanning: false,
+            quiet_scan: false,
+            keep_position: None,
             should_quit: false,
             pending_expand: HashSet::new(),
             pending_select: None,
@@ -448,6 +454,7 @@ impl App {
         }
         self.status_generation += 1;
         self.scanning = true;
+        self.quiet_scan = false;
         let generation = self.status_generation;
         self.pool.submit(TaskRequest::ScanStatus {
             generation,
@@ -509,13 +516,26 @@ impl App {
             upto: usize::MAX,
         });
     }
+
+    /// 通知は直前の操作と表示中のファイルに紐づく。別のファイルへ移ったら消す。
+    /// 「これ以降に変更箇所はない」のような内容依存の文言が残ると矛盾するため。
+    fn clear_notice_for(&mut self, path: Option<&Path>) {
+        if self.notice.is_none() {
+            return;
+        }
+        if self.content.path() != path {
+            self.notice = None;
+        }
+    }
     /// ツリーの選択に応じて右ペインの読み込みを依頼する。
     /// 世代番号を進めることで、押しっぱなしの移動中に届く古い結果を捨てられる。
     pub fn request_content(&mut self) {
         let Some(node) = self.tree().selected_node().cloned() else {
             self.content = ContentState::Empty;
+            self.clear_notice_for(None);
             return;
         };
+        self.clear_notice_for(Some(&node.path));
         if self.mode == Mode::Log {
             self.request_log_content(&node);
             return;
@@ -699,7 +719,7 @@ impl App {
                     parent,
                     Node::file(name, change.path.clone(), depth, Some(parent)),
                 );
-                tree.set_status(id, Some(change.kind));
+                tree.set_status(id, Some(change.status()));
             }
         } else {
             for change in &files {
@@ -708,7 +728,7 @@ impl App {
                     TreeModel::ROOT,
                     Node::file(label, change.path.clone(), 0, Some(TreeModel::ROOT)),
                 );
-                tree.set_status(id, Some(change.kind));
+                tree.set_status(id, Some(change.status()));
             }
         }
 
@@ -722,11 +742,11 @@ impl App {
 
     /// tree モードのツリーに Git ステータスを反映する。
     pub fn apply_status_to_fs_tree(&mut self) {
-        let map: HashMap<&Path, ChangeKind> = self
+        let map: HashMap<&Path, FileStatus> = self
             .changes
             .files
             .iter()
-            .map(|c| (c.path.as_path(), c.kind))
+            .map(|c| (c.path.as_path(), c.status()))
             .collect();
         for id in 0..self.fs_tree.node_count() as u32 {
             let status = map.get(self.fs_tree.node(id).path.as_path()).copied();
@@ -769,5 +789,35 @@ impl App {
         self.log_specs.clear();
         self.log_changes.clear();
         self.log_end = false;
+    }
+}
+
+impl App {
+    /// 表示中の位置を控える。読み直しで同じファイルが戻ってきたら復元する。
+    pub fn keep_view_position(&mut self) {
+        let position = match &self.content {
+            ContentState::Text(view) => Some((view.path.clone(), view.offset, view.hscroll)),
+            ContentState::Diff(view) => Some((view.change.path.clone(), view.offset, view.hscroll)),
+            _ => None,
+        };
+        self.keep_position = position;
+    }
+
+    /// 控えた位置を新しい内容へ戻す。別のファイルなら何もしない。
+    pub fn restore_view_position(&mut self) {
+        let Some((path, offset, hscroll)) = self.keep_position.take() else {
+            return;
+        };
+        match &mut self.content {
+            ContentState::Text(view) if view.path == path => {
+                view.offset = offset.min(view.table.len().saturating_sub(1));
+                view.hscroll = hscroll;
+            }
+            ContentState::Diff(view) if view.change.path == path => {
+                view.offset = offset.min(view.display_len().saturating_sub(1));
+                view.hscroll = hscroll;
+            }
+            _ => {}
+        }
     }
 }

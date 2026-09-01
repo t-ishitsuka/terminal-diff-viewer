@@ -85,7 +85,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         .map(|h| h.name.clone())
         .unwrap_or_else(|| "-".into());
     let changed = app.changes.files.len();
-    let scanning = if app.scanning { " (走査中)" } else { "" };
+    // 自動追従の走査は頻繁に起きるため出さない (点滅して読みにくくなる)
+    let scanning = if app.scanning && !app.quiet_scan {
+        " (走査中)"
+    } else {
+        ""
+    };
 
     let position = match &app.content {
         ContentState::Diff(view) => {

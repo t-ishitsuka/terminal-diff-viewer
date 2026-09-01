@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::{AccessKind, AccessMode};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::task::AppEvent;
 
@@ -58,6 +59,19 @@ fn debounce(filter: &Filter, rx: &Receiver<notify::Result<Event>>, out: &Sender<
     }
 }
 
+/// 内容が変わったと分かるイベントだけを通す。
+///
+/// notify の inotify バックエンドは `IN_OPEN` も購読するため、tdv 自身がファイルを
+/// 読むだけでイベントが起きる。これを通すと「更新 → 読み込み → 更新」の輪が回り続ける。
+fn changes_content(kind: &EventKind) -> bool {
+    match kind {
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => true,
+        // 書き込み後のクローズは変更の完了を表すため通す
+        EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
+        EventKind::Access(_) => false,
+        EventKind::Any | EventKind::Other => true,
+    }
+}
 /// 監視対象外のイベントを落とす。
 struct Filter {
     root: PathBuf,
@@ -82,7 +96,7 @@ impl Filter {
         let Ok(event) = event else {
             return false;
         };
-        event.paths.iter().any(|path| self.watches(path))
+        changes_content(&event.kind) && event.paths.iter().any(|path| self.watches(path))
     }
 
     fn watches(&self, path: &Path) -> bool {

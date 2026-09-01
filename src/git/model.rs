@@ -34,6 +34,31 @@ impl ChangeKind {
     }
 }
 
+/// ツリーに出す 2 桁のステータス。`git status --porcelain` と同じ読み方をする。
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct FileStatus {
+    /// 統合結果。色と 1 桁しか出せない場面で使う。
+    pub kind: ChangeKind,
+    /// index↔HEAD (stage 済みの変更)。
+    pub index: Option<ChangeKind>,
+    /// 作業ツリー↔index (未 stage の変更)。
+    pub worktree: Option<ChangeKind>,
+}
+
+impl FileStatus {
+    /// (1 桁目, 2 桁目)。1 桁目が stage 済み、2 桁目が未 stage を表す。
+    pub fn markers(self) -> (Option<ChangeKind>, Option<ChangeKind>) {
+        match self.kind {
+            // git と同じく未追跡は 2 桁とも ?
+            ChangeKind::Untracked => (Some(ChangeKind::Untracked), Some(ChangeKind::Untracked)),
+            // どちら側かが分かる場合はその位置に出す
+            _ if self.index.is_some() || self.worktree.is_some() => (self.index, self.worktree),
+            // ref 間比較やコミットの差分は stage の区別を持たない
+            kind => (Some(kind), None),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FileChange {
     /// リポジトリルートからの相対パス。
@@ -41,9 +66,21 @@ pub struct FileChange {
     /// リネーム元。リネーム以外では None。
     pub old_path: Option<PathBuf>,
     pub kind: ChangeKind,
+    /// stage 済み側の観測。比較対象によっては持たない。
+    pub index_kind: Option<ChangeKind>,
+    /// 未 stage 側の観測。比較対象によっては持たない。
+    pub worktree_kind: Option<ChangeKind>,
 }
 
 impl FileChange {
+    pub fn status(&self) -> FileStatus {
+        FileStatus {
+            kind: self.kind,
+            index: self.index_kind,
+            worktree: self.worktree_kind,
+        }
+    }
+
     /// HEAD 側を引くときのパス。リネームなら旧パスを使う。
     pub fn old_lookup_path(&self) -> &PathBuf {
         self.old_path.as_ref().unwrap_or(&self.path)

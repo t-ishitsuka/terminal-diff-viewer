@@ -643,6 +643,7 @@ pub fn on_task(app: &mut App, result: TaskResult) {
                 Ok(TextOutcome::Unsupported(reason)) => ContentState::Unsupported { path, reason },
                 Err(error) => ContentState::Failed { path, error },
             };
+            app.restore_view_position();
             reapply_search(app);
         }
 
@@ -679,6 +680,7 @@ pub fn on_task(app: &mut App, result: TaskResult) {
                 Ok(Content::Unsupported(reason)) => ContentState::Unsupported { path, reason },
                 Err(error) => ContentState::Failed { path, error },
             };
+            app.restore_view_position();
             reapply_search(app);
         }
 
@@ -769,7 +771,7 @@ pub fn on_task(app: &mut App, result: TaskResult) {
                             let name = change.path.display().to_string();
                             let child = Node::file(name, change.path.clone(), depth, Some(node));
                             let child = app.log_tree.push_child(node, child);
-                            app.log_tree.set_status(child, Some(change.kind));
+                            app.log_tree.set_status(child, Some(change.status()));
                         }
                         app.log_tree.mark_loaded(node);
                     }
@@ -869,6 +871,9 @@ pub fn on_fs_change(app: &mut App) {
         return;
     }
     app.request_status();
-    // 表示中のファイル自体が書き換わっている場合もあるため読み直す
+    app.quiet_scan = true;
+    // 表示中のファイル自体が書き換わっている場合もあるため読み直す。
+    // 読み直しで先頭へ戻らないよう、今の表示位置を持ち越す
+    app.keep_view_position();
     app.request_content();
 }

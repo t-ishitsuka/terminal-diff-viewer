@@ -119,7 +119,7 @@ syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定�
 ## 開発
 
 ```sh
-cargo test                 # 単体 58 + 統合 33
+cargo test                 # 単体 58 + 統合 35
 cargo clippy --all-targets
 nix build                  # サンドボックス内でテストごとビルド
 

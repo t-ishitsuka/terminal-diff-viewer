@@ -7,6 +7,7 @@ use ratatui::widgets::Paragraph;
 use super::text::{fit_width, pad_to};
 use super::theme::Theme;
 use crate::app::{App, Focus};
+use crate::git::{ChangeKind, FileStatus};
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let opts = app.cfg.text;
@@ -49,16 +50,17 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
             ""
         };
         let label = format!("{}{icon}{}", "  ".repeat(node.depth as usize), node.name);
-        let label = fit_width(&label, width.saturating_sub(2), opts);
-        let label = pad_to(&label, width.saturating_sub(2), opts);
+        let label = fit_width(&label, width.saturating_sub(3), opts);
+        let label = pad_to(&label, width.saturating_sub(3), opts);
 
-        let marker = node.status.map_or(' ', |k| k.marker());
-        // マーカーは Git の状態、名前はファイル種別を表す
-        let marker_style = node
-            .status
-            .map_or(theme.dim, |kind| theme.change_style(kind));
+        // 先頭 2 桁は Git の状態 (1 桁目が stage 済み、2 桁目が未 stage)、名前はファイル種別を表す
+        let (staged, unstaged) = node.status.map_or((None, None), FileStatus::markers);
+        let cell = |kind: Option<ChangeKind>| {
+            let text = kind.map_or(' ', ChangeKind::marker).to_string();
+            let style = kind.map_or(theme.dim, |k| theme.change_style(k));
+            Span::styled(text, style)
+        };
         let name_style = theme.entry_style(node.kind, &node.name);
-
         let row_style = if offset + row == selected {
             if focused {
                 theme.selection
@@ -71,7 +73,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
 
         lines.push(
             Line::from(vec![
-                Span::styled(marker.to_string(), marker_style),
+                cell(staged),
+                cell(unstaged),
                 Span::raw(" "),
                 Span::styled(label, name_style),
             ])

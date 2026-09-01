@@ -1391,3 +1391,152 @@ fn fs_change_reloads_status_and_content() {
     update::on_fs_change(&mut h.app);
     assert_eq!(h.app.status_generation, stopped, "停止中に再取得している");
 }
+
+/// 読み取りで通知が起きると「更新 → 読み込み → 更新」の輪が回り続ける。
+#[test]
+fn reading_files_does_not_trigger_notifications() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("a.txt"), "v1\n").unwrap();
+    let (tx, rx) = channel::<AppEvent>();
+    let _watcher = tdv::watch::spawn(root, tx).expect("監視を開始できる");
+    std::thread::sleep(Duration::from_millis(300));
+
+    for _ in 0..5 {
+        let _ = std::fs::read(root.join("a.txt")).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        rx.recv_timeout(Duration::from_secs(2)).is_err(),
+        "読み取りだけで通知が来る"
+    );
+
+    // 書き換えは従来どおり通知する
+    std::fs::write(root.join("a.txt"), "v2\n").unwrap();
+    assert!(
+        matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(AppEvent::FsChanged)
+        ),
+        "書き換えが通知されない"
+    );
+}
+
+#[test]
+fn auto_refresh_keeps_the_scroll_position() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 24);
+    open_main_rs(&mut h);
+
+    // 下の方まで送ってから外部の変更を反映させる
+    h.act(Action::ContentScroll(8));
+    let ContentState::Diff(view) = &h.app.content else {
+        panic!("差分が表示されていない");
+    };
+    let offset = view.offset;
+    assert!(offset > 0, "スクロールできていない");
+
+    let modified = numbered(20)
+        .replace("line 10\n", "line 10 changed\n")
+        .replace("line 3\n", "line 3 also changed\n");
+    std::fs::write(dir.path().join("src/main.rs"), modified).unwrap();
+    let before = h.app.status_generation;
+    update::on_fs_change(&mut h.app);
+    h.pump_until("再取得", |app| {
+        app.status_generation > before
+            && !app.scanning
+            && matches!(&app.content, ContentState::Diff(_))
+    });
+
+    let ContentState::Diff(view) = &h.app.content else {
+        panic!("差分が表示されていない");
+    };
+    assert_eq!(view.offset, offset, "自動更新で先頭へ戻っている");
+    assert_eq!(view.diff.hunks.len(), 2, "新しい変更が反映されていない");
+    // 自動追従の走査では走査中の表示を出さない
+    assert!(h.app.quiet_scan);
+}
+
+#[test]
+fn end_of_hunks_notice_does_not_survive_a_file_switch() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 24);
+    open_main_rs(&mut h);
+
+    // 末尾まで送ると終端の通知が出る
+    h.act(Action::NextHunk);
+    h.act(Action::NextHunk);
+    assert_eq!(
+        h.app.notice.as_deref(),
+        Some("これ以降に変更箇所はない"),
+        "終端の通知が出ていない"
+    );
+
+    // 別のファイルへ移ったら消える
+    h.act(Action::NextFile);
+    h.pump_until("差分の計算", |app| {
+        !matches!(&app.content, ContentState::Loading { .. })
+    });
+    assert_eq!(h.app.notice, None, "別のファイルでも通知が残っている");
+
+    // 同じファイルの中を動かす分には残る
+    h.act(Action::NextHunk);
+    h.act(Action::NextHunk);
+    let notice = h.app.notice.clone();
+    h.act(Action::ContentScroll(1));
+    assert_eq!(h.app.notice, notice, "同じファイル内で消えている");
+}
+
+#[test]
+fn tree_markers_match_git_porcelain() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    for name in ["staged.txt", "unstaged.txt", "both.txt", "gone.txt"] {
+        std::fs::write(root.join(name), "v1\n").unwrap();
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "init"]);
+
+    std::fs::write(root.join("staged.txt"), "v2\n").unwrap();
+    git(root, &["add", "staged.txt"]);
+    std::fs::write(root.join("unstaged.txt"), "v2\n").unwrap();
+    std::fs::write(root.join("both.txt"), "v2\n").unwrap();
+    git(root, &["add", "both.txt"]);
+    std::fs::write(root.join("both.txt"), "v3\n").unwrap();
+    std::fs::remove_file(root.join("gone.txt")).unwrap();
+    std::fs::write(root.join("new.txt"), "new\n").unwrap();
+
+    let mut h = Harness::new(root, 120, 30);
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+    h.act(Action::SetMode(Mode::Diff));
+    h.pump_until("差分の計算", |app| {
+        !matches!(&app.content, ContentState::Loading { .. })
+    });
+
+    // 画面に出た 2 桁の記号を git status --porcelain と突き合わせる
+    let screen = h.render();
+    let mut shown: Vec<String> = screen
+        .lines()
+        .filter_map(|line| {
+            let (marker, rest) = line.split_at_checked(3)?;
+            let name = rest.split_whitespace().next()?;
+            name.ends_with(".txt")
+                .then(|| format!("{}{name}", marker.trim_end()))
+        })
+        .collect();
+    shown.sort();
+
+    let mut expected: Vec<String> = git_output(root, &["status", "--porcelain"])
+        .lines()
+        .map(|l| {
+            let (marker, name) = l.split_at(3);
+            format!("{}{name}", marker.trim_end())
+        })
+        .collect();
+    expected.sort();
+
+    assert_eq!(shown, expected, "\n{screen}");
+}
