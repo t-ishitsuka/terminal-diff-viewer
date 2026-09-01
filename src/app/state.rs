@@ -55,6 +55,8 @@ pub enum InputKind {
     Search,
     /// ツリーのファイル名絞り込み。
     Filter,
+    /// ref 間比較の対象指定。
+    Range,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -423,7 +425,7 @@ impl App {
         let generation = self.status_generation;
         self.pool.submit(TaskRequest::ScanStatus {
             generation,
-            spec: self.diff_spec,
+            spec: self.diff_spec.clone(),
         });
     }
 
@@ -517,7 +519,7 @@ impl App {
                 self.pool.submit(TaskRequest::ComputeDiff {
                     generation,
                     change,
-                    spec: self.diff_spec,
+                    spec: self.diff_spec.clone(),
                 });
             }
         }

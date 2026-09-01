@@ -835,10 +835,12 @@ fn changed_paths(h: &Harness) -> Vec<String> {
     paths
 }
 
+/// --name-status の各行から対象パスを取る。リネーム行 (R100 old new) は新パスを採る。
 fn expected_paths(out: &str) -> Vec<String> {
     let mut paths: Vec<String> = out
         .lines()
-        .filter_map(|l| l.split('\t').nth(1).map(str::to_string))
+        .filter_map(|l| l.split('\t').next_back().map(str::to_string))
+        .filter(|p| !p.is_empty())
         .collect();
     paths.sort();
     paths
@@ -1072,5 +1074,139 @@ fn unstage_restores_the_index_to_head() {
         porcelain(dir.path()),
         expected,
         "unstage 後が git reset 相当になっていない"
+    );
+}
+
+/// 3 コミット分の履歴を作る。ディレクトリごとの追加とリネームを含める。
+fn setup_history_repo(root: &Path) {
+    git(root, &["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("base.txt"), "v1\n").unwrap();
+    std::fs::write(
+        root.join("moved-from.txt"),
+        "content that survives a rename\n",
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "c1"]);
+
+    std::fs::create_dir_all(root.join("added-dir")).unwrap();
+    std::fs::write(root.join("added-dir/one.txt"), "one\n").unwrap();
+    std::fs::write(root.join("added-dir/two.txt"), "two\n").unwrap();
+    std::fs::write(root.join("base.txt"), "v2\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", "c2"]);
+
+    std::fs::rename(root.join("moved-from.txt"), root.join("moved-to.txt")).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "c3"]);
+}
+
+fn set_range(h: &mut Harness, input: &str) {
+    let before = h.app.status_generation;
+    h.act(Action::StartRange);
+    // 直前の指定が残るため消してから入力する
+    for _ in 0..64 {
+        h.act(Action::InputBackspace);
+    }
+    for c in input.chars() {
+        h.act(Action::InputChar(c));
+    }
+    h.act(Action::InputSubmit);
+    h.pump_until("ref 間比較の status", |app| {
+        app.status_generation > before && !app.scanning
+    });
+}
+
+#[test]
+fn range_diff_matches_git_name_status() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_history_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.scanning);
+
+    for range in ["HEAD~2..HEAD", "HEAD~2..HEAD~1", "HEAD~1..HEAD"] {
+        set_range(&mut h, range);
+        assert_eq!(
+            h.app.diff_spec,
+            DiffSpec::Range {
+                from: range.split_once("..").unwrap().0.to_string(),
+                to: range.split_once("..").unwrap().1.to_string(),
+            }
+        );
+        let expected = expected_paths(&git_output(
+            dir.path(),
+            &["diff", range, "--name-status", "-M"],
+        ));
+        assert_eq!(changed_paths(&h), expected, "{range} が git と一致しない");
+    }
+
+    // ディレクトリごと追加したコミットでは、中のファイルが個別に出る
+    set_range(&mut h, "HEAD~2..HEAD~1");
+    assert!(
+        changed_paths(&h).contains(&"added-dir/one.txt".to_string()),
+        "追加ディレクトリの中身が出ていない: {:?}",
+        changed_paths(&h)
+    );
+}
+
+#[test]
+fn range_diff_shows_the_contents_of_both_revisions() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_history_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.scanning);
+    h.act(Action::SetMode(Mode::Diff));
+    set_range(&mut h, "HEAD~2..HEAD~1");
+    h.pump_until("差分の計算", |app| {
+        matches!(&app.content, ContentState::Diff(_))
+    });
+
+    select_path(&mut h, "base.txt");
+    h.pump_until("差分の計算", |app| {
+        app.content.path() == Some(Path::new("base.txt"))
+            && matches!(&app.content, ContentState::Diff(_))
+    });
+    let ContentState::Diff(view) = &h.app.content else {
+        panic!("差分が表示されていない");
+    };
+    assert_eq!(
+        (
+            String::from_utf8_lossy(view.diff.old.line_display(0)).into_owned(),
+            String::from_utf8_lossy(view.diff.new.line_display(0)).into_owned(),
+        ),
+        ("v1".to_string(), "v2".to_string()),
+        "両方のコミットの内容が出ていない"
+    );
+}
+
+#[test]
+fn invalid_range_is_reported_without_changing_the_spec() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_history_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.scanning);
+
+    // 書式エラーは比較対象を変えずに通知だけ出す
+    h.act(Action::StartRange);
+    for c in "a...b".chars() {
+        h.act(Action::InputChar(c));
+    }
+    h.act(Action::InputSubmit);
+    assert_eq!(h.app.diff_spec, DiffSpec::WorktreeVsHead);
+    assert!(
+        h.app.notice.as_deref().is_some_and(|n| n.contains("三点")),
+        "{:?}",
+        h.app.notice
+    );
+
+    // 解決できない ref は status のエラーとして出る
+    set_range(&mut h, "no-such-ref..HEAD");
+    assert!(
+        h.app
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("no-such-ref")),
+        "{:?}",
+        h.app.notice
     );
 }

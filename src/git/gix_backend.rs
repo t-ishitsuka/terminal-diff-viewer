@@ -55,7 +55,7 @@ enum WorktreeObservation {
 }
 
 impl Acc {
-    fn resolve(&self, spec: DiffSpec) -> Option<ChangeKind> {
+    fn resolve(&self, spec: &DiffSpec) -> Option<ChangeKind> {
         use TreeObservation as T;
         use WorktreeObservation as W;
         match spec {
@@ -68,6 +68,7 @@ impl Acc {
                 T::Rewrite => ChangeKind::Renamed,
             }),
             // 未 stage の変更のみ。index との差だけを見る
+            DiffSpec::Range { .. } => None,
             DiffSpec::WorktreeVsIndex => self.worktree.map(|w| match w {
                 W::Removed => ChangeKind::Deleted,
                 W::Modified => ChangeKind::Modified,
@@ -95,7 +96,7 @@ impl Acc {
     }
 
     /// リネーム元。比較対象ごとに参照する観測が変わる。
-    fn old_path(&self, spec: DiffSpec) -> Option<&BString> {
+    fn old_path(&self, spec: &DiffSpec) -> Option<&BString> {
         match spec {
             DiffSpec::WorktreeVsHead => self
                 .tree_old_path
@@ -103,10 +104,84 @@ impl Acc {
                 .or(self.worktree_old_path.as_ref()),
             DiffSpec::StagedVsHead => self.tree_old_path.as_ref(),
             DiffSpec::WorktreeVsIndex => self.worktree_old_path.as_ref(),
+            DiffSpec::Range { .. } => None,
         }
     }
 }
 
+/// ref 間比較。ツリー同士を比較するため作業ツリーも index も読まない。
+impl GixBackend {
+    fn changes_between(&self, from: &str, to: &str) -> Result<ChangeSet> {
+        use gix::object::tree::diff::{Action, Change};
+
+        let repo = self.repo.to_thread_local();
+        let old = resolve_tree(&repo, from)?;
+        let new = resolve_tree(&repo, to)?;
+
+        let mut files: Vec<FileChange> = Vec::new();
+        old.changes()?
+            .for_each_to_obtain_tree(&new, |change| {
+                let entry = match change {
+                    Change::Addition {
+                        location,
+                        entry_mode,
+                        ..
+                    } => (!entry_mode.is_tree()).then_some((location, None, ChangeKind::Added)),
+                    Change::Deletion {
+                        location,
+                        entry_mode,
+                        ..
+                    } => (!entry_mode.is_tree()).then_some((location, None, ChangeKind::Deleted)),
+                    Change::Modification {
+                        location,
+                        entry_mode,
+                        ..
+                    } => (!entry_mode.is_tree()).then_some((location, None, ChangeKind::Modified)),
+                    Change::Rewrite {
+                        source_location,
+                        location,
+                        ..
+                    } => Some((location, Some(source_location), ChangeKind::Renamed)),
+                };
+                if let Some((location, source, kind)) = entry {
+                    files.push(FileChange {
+                        path: gix::path::from_bstr(location).into_owned(),
+                        old_path: source.map(|s| gix::path::from_bstr(s).into_owned()),
+                        kind,
+                    });
+                }
+                Ok::<_, std::convert::Infallible>(Action::Continue(()))
+            })
+            .with_context(|| format!("{from}..{to} の差分を取得できない"))?;
+
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(ChangeSet { files })
+    }
+}
+
+/// revspec を解決してツリーを得る。
+fn resolve_tree<'repo>(repo: &'repo gix::Repository, rev: &str) -> Result<gix::Tree<'repo>> {
+    repo.rev_parse_single(rev)
+        .with_context(|| format!("{rev} を解決できない"))?
+        .object()?
+        .peel_to_tree()
+        .with_context(|| format!("{rev} はツリーへ辿れない"))
+}
+
+/// ツリーから blob を引く。
+fn tree_blob(
+    repo: &gix::Repository,
+    rev: &str,
+    rela_path: &Path,
+    max_bytes: u64,
+) -> Result<Loaded> {
+    let mut tree = resolve_tree(repo, rev)?;
+    let entry = tree
+        .peel_to_entry_by_path(rela_path)?
+        .ok_or_else(|| anyhow!("{rev} に {} が見つからない", rela_path.display()))?;
+    let object = entry.object()?;
+    Ok(classify(object.data.as_slice(), max_bytes))
+}
 /// index の書き換え。1 ファイル分の stage / unstage をまとめて扱う。
 impl GixBackend {
     /// index を読み込み、編集し、書き戻す。書き込みは gix がロックを取って行う。
@@ -235,7 +310,10 @@ impl GitBackend for GixBackend {
         Ok(HeadInfo { name })
     }
 
-    fn changes(&self, spec: DiffSpec) -> Result<ChangeSet> {
+    fn changes(&self, spec: &DiffSpec) -> Result<ChangeSet> {
+        if let Some((from, to)) = spec.range() {
+            return self.changes_between(from, to);
+        }
         use gix::diff::index::ChangeRef;
         use gix::status::index_worktree::{Item as IwItem, RewriteSource};
         use gix::status::plumbing::index_as_worktree::{Change as IwChange, EntryStatus};
@@ -336,7 +414,7 @@ impl GitBackend for GixBackend {
 
     fn load(
         &self,
-        spec: DiffSpec,
+        spec: &DiffSpec,
         side: Side,
         change: &FileChange,
         max_bytes: u64,
@@ -349,21 +427,26 @@ impl GitBackend for GixBackend {
                 }
                 let repo = self.repo.to_thread_local();
                 let path = change.old_lookup_path();
-                if spec.old_is_index() {
-                    index_blob(&repo, path, max_bytes)
-                } else {
-                    head_blob(&repo, path, max_bytes)
+                match spec.range() {
+                    Some((from, _)) => tree_blob(&repo, from, path, max_bytes),
+                    None if spec.old_is_index() => index_blob(&repo, path, max_bytes),
+                    None => tree_blob(&repo, "HEAD", path, max_bytes),
                 }
             }
             Side::New => {
                 if !change.has_new_side() {
                     return empty();
                 }
-                if spec.new_is_index() {
-                    let repo = self.repo.to_thread_local();
-                    index_blob(&repo, &change.path, max_bytes)
-                } else {
-                    read_worktree_file(&self.workdir.join(&change.path), max_bytes)
+                match spec.range() {
+                    Some((_, to)) => {
+                        let repo = self.repo.to_thread_local();
+                        tree_blob(&repo, to, &change.path, max_bytes)
+                    }
+                    None if spec.new_is_index() => {
+                        let repo = self.repo.to_thread_local();
+                        index_blob(&repo, &change.path, max_bytes)
+                    }
+                    None => read_worktree_file(&self.workdir.join(&change.path), max_bytes),
                 }
             }
         }
@@ -396,16 +479,6 @@ impl GitBackend for GixBackend {
             restore_from_head(repo, index, &change.path)
         })
     }
-}
-
-/// HEAD のツリーから blob を引く。
-fn head_blob(repo: &gix::Repository, rela_path: &Path, max_bytes: u64) -> Result<Loaded> {
-    let mut tree = repo.head_tree()?;
-    let entry = tree
-        .peel_to_entry_by_path(rela_path)?
-        .ok_or_else(|| anyhow!("HEAD に {} が見つからない", rela_path.display()))?;
-    let object = entry.object()?;
-    Ok(classify(object.data.as_slice(), max_bytes))
 }
 
 /// index に登録されている内容 (stage 済みの内容) を引く。
@@ -531,13 +604,13 @@ mod tests {
         for (tree, worktree, head, staged, index) in cases {
             let a = acc(*tree, *worktree);
             assert_eq!(
-                a.resolve(DiffSpec::WorktreeVsHead),
+                a.resolve(&DiffSpec::WorktreeVsHead),
                 *head,
                 "{:?}",
                 (tree.is_some(), worktree.is_some())
             );
-            assert_eq!(a.resolve(DiffSpec::StagedVsHead), *staged);
-            assert_eq!(a.resolve(DiffSpec::WorktreeVsIndex), *index);
+            assert_eq!(a.resolve(&DiffSpec::StagedVsHead), *staged);
+            assert_eq!(a.resolve(&DiffSpec::WorktreeVsIndex), *index);
         }
     }
 
@@ -550,12 +623,15 @@ mod tests {
             tree_old_path: Some(BString::from("old-in-head")),
             worktree_old_path: Some(BString::from("old-in-index")),
         };
-        assert_eq!(a.old_path(DiffSpec::StagedVsHead).unwrap(), "old-in-head");
+        assert_eq!(a.old_path(&DiffSpec::StagedVsHead).unwrap(), "old-in-head");
         assert_eq!(
-            a.old_path(DiffSpec::WorktreeVsIndex).unwrap(),
+            a.old_path(&DiffSpec::WorktreeVsIndex).unwrap(),
             "old-in-index"
         );
-        assert_eq!(a.old_path(DiffSpec::WorktreeVsHead).unwrap(), "old-in-head");
+        assert_eq!(
+            a.old_path(&DiffSpec::WorktreeVsHead).unwrap(),
+            "old-in-head"
+        );
 
         let only_worktree = Acc {
             worktree: Some(W::Rewrite),
@@ -563,7 +639,7 @@ mod tests {
             ..Acc::default()
         };
         assert_eq!(
-            only_worktree.old_path(DiffSpec::WorktreeVsHead).unwrap(),
+            only_worktree.old_path(&DiffSpec::WorktreeVsHead).unwrap(),
             "old-in-index"
         );
     }

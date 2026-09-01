@@ -45,6 +45,7 @@ pub enum Action {
 
     StartSearch,
     StartFilter,
+    StartRange,
     InputChar(char),
     InputBackspace,
     InputSubmit,
@@ -112,6 +113,7 @@ impl KeyMap {
             KeyCode::Char('w') if !ctrl => return Action::ToggleWrap,
             // 比較対象の切り替えは tree モードのステータス記号にも効く
             KeyCode::Char('s') if !ctrl => return Action::CycleDiffSpec,
+            KeyCode::Char('R') => return Action::StartRange,
             KeyCode::Tab => return Action::CycleFocus(1),
             KeyCode::BackTab => return Action::CycleFocus(-1),
             KeyCode::Char('<') => return Action::ResizeTree(-1),

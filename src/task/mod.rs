@@ -58,7 +58,7 @@ fn handle(ctx: &WorkerCtx, request: TaskRequest) -> TaskResult {
     match request {
         TaskRequest::ScanStatus { generation, spec } => TaskResult::Status {
             generation,
-            outcome: scan_status(ctx, spec).map_err(|e| format!("{e:#}")),
+            outcome: scan_status(ctx, &spec).map_err(|e| format!("{e:#}")),
         },
         TaskRequest::ReadDir {
             generation,
@@ -84,7 +84,7 @@ fn handle(ctx: &WorkerCtx, request: TaskRequest) -> TaskResult {
             change,
             spec,
         } => {
-            let outcome = compute_diff(ctx, &change, spec).map_err(|e| format!("{e:#}"));
+            let outcome = compute_diff(ctx, &change, &spec).map_err(|e| format!("{e:#}"));
             TaskResult::Diff {
                 generation,
                 change,
@@ -115,7 +115,7 @@ fn handle(ctx: &WorkerCtx, request: TaskRequest) -> TaskResult {
     }
 }
 
-fn scan_status(ctx: &WorkerCtx, spec: DiffSpec) -> anyhow::Result<StatusOutcome> {
+fn scan_status(ctx: &WorkerCtx, spec: &DiffSpec) -> anyhow::Result<StatusOutcome> {
     let backend = ctx
         .backend
         .as_ref()
@@ -136,7 +136,7 @@ fn load_text(ctx: &WorkerCtx, abs: &Path) -> anyhow::Result<TextOutcome> {
     })
 }
 
-fn compute_diff(ctx: &WorkerCtx, change: &FileChange, spec: DiffSpec) -> anyhow::Result<Content> {
+fn compute_diff(ctx: &WorkerCtx, change: &FileChange, spec: &DiffSpec) -> anyhow::Result<Content> {
     let backend = ctx
         .backend
         .as_ref()

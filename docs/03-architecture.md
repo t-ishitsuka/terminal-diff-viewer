@@ -119,7 +119,7 @@ pub enum DiffSpec {
     WorktreeVsHead,     // staged と unstaged を統合
     StagedVsHead,       // stage 済みの変更のみ
     WorktreeVsIndex,    // 未 stage の変更のみ
-    // Range { from: Rev, to: Rev },  // 06 §5 の M8 で追加
+    Range { from: String, to: String },  // 任意 ref 間。解決はワーカー側
 }
 
 pub enum Side { Old, New }
@@ -173,6 +173,7 @@ pub struct BlobContent {
 | WorktreeVsHead | HEAD のツリー | 作業ツリー |
 | StagedVsHead | HEAD のツリー | index |
 | WorktreeVsIndex | index | 作業ツリー |
+| Range { from, to } | from のツリー | to のツリー |
 
 index を書き換える操作 (stage / unstage) は次の手順で行う。エントリを変えるとツリーキャッシュが古くなるため、書き戻す前に落とす。
 

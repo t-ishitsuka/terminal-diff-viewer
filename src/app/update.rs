@@ -140,6 +140,15 @@ pub fn apply(app: &mut App, action: Action) {
                 buffer: app.search.query.clone(),
             };
         }
+        Action::StartRange => {
+            app.overlay = Overlay::Input {
+                kind: InputKind::Range,
+                buffer: match &app.diff_spec {
+                    DiffSpec::Range { from, to } => format!("{from}..{to}"),
+                    _ => String::new(),
+                },
+            };
+        }
         Action::StartFilter => {
             app.overlay = Overlay::Input {
                 kind: InputKind::Filter,
@@ -151,9 +160,11 @@ pub fn apply(app: &mut App, action: Action) {
             buffer.pop();
         }),
         Action::InputSubmit => {
-            if let Overlay::Input { kind, .. } = app.overlay.clone() {
+            if let Overlay::Input { kind, buffer } = app.overlay.clone() {
                 app.overlay = Overlay::None;
-                if kind == InputKind::Search {
+                if kind == InputKind::Range {
+                    apply_range(app, &buffer);
+                } else if kind == InputKind::Search {
                     if app.search.hits.is_empty() {
                         app.notice = Some(format!("一致なし: {}", app.search.query));
                     } else {
@@ -174,6 +185,8 @@ pub fn apply(app: &mut App, action: Action) {
                         app.tree().set_filter(None);
                         app.request_content();
                     }
+                    // 比較対象は確定するまで変えていないので戻す処理は要らない
+                    InputKind::Range => {}
                 }
             }
         }
@@ -410,6 +423,8 @@ fn edit_input(app: &mut App, edit: impl FnOnce(&mut String)) {
             app.tree().select_first();
             app.request_content();
         }
+        // ref は打ち終わるまで解決できないため、確定時にだけ処理する
+        InputKind::Range => {}
     }
 }
 
@@ -738,4 +753,18 @@ fn stage_selected(app: &mut App, unstage: bool) {
         return;
     };
     app.pool.submit(TaskRequest::Stage { change, unstage });
+}
+
+/// 入力された ref 間比較を反映する。書式が不正なら通知に出して比較対象は変えない。
+fn apply_range(app: &mut App, input: &str) {
+    match DiffSpec::parse_range(input) {
+        Ok(spec) => {
+            app.diff_spec = spec;
+            if app.mode == Mode::Diff {
+                app.content = ContentState::Empty;
+            }
+            app.request_status();
+        }
+        Err(message) => app.notice = Some(message),
+    }
 }

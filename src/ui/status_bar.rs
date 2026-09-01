@@ -60,6 +60,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
         let prefix = match kind {
             InputKind::Search => "/",
             InputKind::Filter => "絞り込み: ",
+            InputKind::Range => "比較対象: ",
         };
         let hits = if *kind == InputKind::Search && app.search.is_active() {
             format!("  ({} 件)", app.search.hits.len())
@@ -109,15 +110,15 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     };
 
     // 既定と異なる表示状態だけを出す
-    let mut states: Vec<&str> = Vec::new();
+    let mut states: Vec<String> = Vec::new();
     if app.unified {
-        states.push("unified");
+        states.push("unified".into());
     }
     if app.wrap {
-        states.push("折返");
+        states.push("折返".into());
     }
     if app.mode == Mode::Diff && app.change_sort != ChangeSort::Path {
-        states.push(app.change_sort.label());
+        states.push(app.change_sort.label().into());
     }
     // 比較対象は差分の意味そのものを変えるため、既定以外は常に出す
     if app.diff_spec != DiffSpec::WorktreeVsHead {
