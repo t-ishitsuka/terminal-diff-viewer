@@ -1210,3 +1210,104 @@ fn invalid_range_is_reported_without_changing_the_spec() {
         h.app.notice
     );
 }
+
+fn commit_subjects(dir: &Path) -> Vec<String> {
+    git_output(dir, &["log", "--format=%h %s"])
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+fn log_labels(h: &mut Harness) -> Vec<String> {
+    let ids = h.app.log_tree.visible().to_vec();
+    ids.iter()
+        .map(|id| h.app.log_tree.node(*id).name.clone())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+#[test]
+fn log_mode_lists_commits_like_git_log() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_history_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.scanning);
+
+    h.act(Action::SetMode(Mode::Log));
+    h.pump_until("コミット一覧", |app| !app.log_commits.is_empty());
+
+    assert_eq!(log_labels(&mut h), commit_subjects(dir.path()));
+    assert!(h.app.log_end, "全件読み切ったら末尾と分かる");
+}
+
+#[test]
+fn log_mode_expands_a_commit_into_its_files() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_history_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.scanning);
+    h.act(Action::SetMode(Mode::Log));
+    h.pump_until("コミット一覧", |app| !app.log_commits.is_empty());
+
+    // 先頭は c3 (リネームのコミット)。展開して中身を見る
+    h.act(Action::TreeFirst);
+    h.act(Action::TreeOpen);
+    h.pump_until("コミットの変更一覧", |app| {
+        app.log_tree.children_count(1) > 0
+    });
+
+    let files: Vec<String> = {
+        let ids = h.app.log_tree.visible().to_vec();
+        ids.iter()
+            .map(|id| h.app.log_tree.node(*id))
+            .filter(|n| !n.is_dir())
+            .map(|n| n.path.display().to_string())
+            .collect()
+    };
+    let expected = expected_paths(&git_output(
+        dir.path(),
+        &["show", "--name-status", "--format=", "-M", "HEAD"],
+    ));
+    assert_eq!(files, expected, "コミットの変更ファイルが git と一致しない");
+
+    // ファイルを選ぶとそのコミットの差分が出る
+    h.act(Action::TreeMove(1));
+    h.pump_until("差分の計算", |app| {
+        matches!(&app.content, ContentState::Diff(_))
+    });
+    let ContentState::Diff(view) = &h.app.content else {
+        panic!("差分が表示されていない");
+    };
+    assert_eq!(view.change.kind.marker(), 'R', "リネームとして出ていない");
+}
+
+#[test]
+fn log_mode_loads_more_commits_when_reaching_the_end() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-q", "-b", "main"]);
+    for i in 1..=5 {
+        std::fs::write(dir.path().join("f.txt"), format!("v{i}\n")).unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", &format!("c{i}")]);
+    }
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.scanning);
+    // 2 件ずつ読ませて追加読み込みを起こす
+    h.app.log_page = 2;
+
+    h.act(Action::SetMode(Mode::Log));
+    h.pump_until("コミット一覧", |app| !app.log_commits.is_empty());
+    assert_eq!(h.app.log_commits.len(), 2, "1 ページ目だけ読んでいる");
+    assert!(!h.app.log_end);
+
+    // 末尾へ移動すると次のページを読む
+    while !h.app.log_end {
+        let before = h.app.log_commits.len();
+        h.act(Action::TreeLast);
+        h.pump_until("追加読み込み", |app| {
+            app.log_commits.len() > before || app.log_end
+        });
+    }
+    assert_eq!(h.app.log_commits.len(), 5);
+    assert_eq!(log_labels(&mut h).len(), 5);
+}

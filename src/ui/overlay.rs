@@ -9,8 +9,8 @@ use crate::app::{App, Overlay};
 const HELP: &[(&str, &str)] = &[
     ("q / Ctrl-c", "終了"),
     ("?", "このヘルプ"),
-    ("m", "tree / diff モードを切り替え"),
-    ("t / d", "モードを直接指定"),
+    ("m", "モードを巡回 (tree → diff → log)"),
+    ("t / d / L", "tree / diff / log モードを直接指定"),
     ("Tab", "ペイン間のフォーカス移動"),
     ("r", "リロード"),
     ("< / >", "左ペイン幅の調整"),

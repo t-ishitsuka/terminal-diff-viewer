@@ -92,4 +92,8 @@ pub trait GitBackend: Send + Sync {
     fn stage(&self, change: &FileChange) -> anyhow::Result<()>;
     /// index を HEAD の内容に戻す。
     fn unstage(&self, change: &FileChange) -> anyhow::Result<()>;
+    /// HEAD から辿れるコミットを新しい順に返す。
+    fn log(&self, skip: usize, limit: usize) -> anyhow::Result<Vec<CommitInfo>>;
+    /// コミット 1 件の差分を表す比較対象 (親..そのコミット)。
+    fn commit_spec(&self, id: &str) -> anyhow::Result<DiffSpec>;
 }

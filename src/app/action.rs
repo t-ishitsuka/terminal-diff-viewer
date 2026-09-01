@@ -114,6 +114,7 @@ impl KeyMap {
             // 比較対象の切り替えは tree モードのステータス記号にも効く
             KeyCode::Char('s') if !ctrl => return Action::CycleDiffSpec,
             KeyCode::Char('R') => return Action::StartRange,
+            KeyCode::Char('L') => return Action::SetMode(Mode::Log),
             KeyCode::Tab => return Action::CycleFocus(1),
             KeyCode::BackTab => return Action::CycleFocus(-1),
             KeyCode::Char('<') => return Action::ResizeTree(-1),

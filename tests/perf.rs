@@ -210,3 +210,68 @@ fn nfr_02_diff_is_drawn_within_budget() {
 fn covered(highlight: &Option<std::sync::Arc<tdv::highlight::Highlighted>>) -> usize {
     highlight.as_ref().map_or(0, |h| h.covered_lines())
 }
+
+/// NFR 相当の目安。1 ページ目のコミット一覧が出るまで。
+const LOG_BUDGET: Duration = Duration::from_millis(300);
+const COMMIT_COUNT: usize = 10_000;
+
+/// 1 万コミットのリポジトリ。fast-import で一括生成する。
+fn setup_deep_history(root: &Path) {
+    git(root, &["init", "-q", "-b", "main"]);
+    let mut script = String::new();
+    script.push_str("blob\nmark :1\ndata 3\nv1\n");
+    for i in 1..=COMMIT_COUNT {
+        script.push_str("commit refs/heads/main\n");
+        script.push_str(&format!("mark :{}\n", i + 1));
+        script.push_str("author test <test@example.com> 1700000000 +0000\n");
+        script.push_str("committer test <test@example.com> 1700000000 +0000\n");
+        let message = format!("commit {i}\n");
+        script.push_str(&format!("data {}\n{message}", message.len()));
+        if i > 1 {
+            script.push_str(&format!("from :{}\n", i));
+        }
+        script.push_str("M 100644 :1 f.txt\n");
+    }
+    let mut child = Command::new("git")
+        .current_dir(root)
+        .args(["fast-import", "--quiet"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("git fast-import を起動できない");
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin")
+        .write_all(script.as_bytes())
+        .unwrap();
+    assert!(child.wait().expect("fast-import").success());
+    git(root, &["reset", "-q", "--hard", "main"]);
+}
+
+#[test]
+#[ignore = "手動計測用。--ignored を付けて実行する"]
+fn log_mode_opens_within_budget_on_a_deep_history() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_deep_history(dir.path());
+
+    let mut h = Harness::new(dir.path());
+    h.pump_until("status 取得", |app| !app.scanning);
+
+    let start = Instant::now();
+    update::apply(&mut h.app, Action::SetMode(Mode::Log));
+    h.pump_until("コミット一覧", |app| !app.log_commits.is_empty());
+    h.draw();
+    let elapsed = start.elapsed();
+
+    println!("--- log モード ({COMMIT_COUNT} コミット) ---");
+    report("切り替えから一覧描画", elapsed, LOG_BUDGET);
+    println!(
+        "1 ページ目の件数: {} (全件は読まない)",
+        h.app.log_commits.len()
+    );
+    assert!(!h.app.log_end, "1 ページで打ち切られていない");
+    assert!(elapsed <= LOG_BUDGET, "一覧の表示が遅い: {elapsed:?}");
+}

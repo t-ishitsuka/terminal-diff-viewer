@@ -24,6 +24,7 @@ pub fn draw_header(
     let mode = match app.mode {
         Mode::Tree => "TREE",
         Mode::Diff => "DIFF",
+        Mode::Log => "LOG",
     };
 
     if show_tree {
@@ -131,8 +132,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     };
 
     let hints = match app.mode {
-        Mode::Tree => "[Tab] ペイン  [m] diff  [/] 絞込  [?] ヘルプ",
+        Mode::Tree => "[Tab] ペイン  [m] モード  [/] 絞込  [?] ヘルプ",
         Mode::Diff => "[]c] 次の変更  [/] 検索  [z] 折畳  [?] ヘルプ",
+        Mode::Log => "[l] コミットを展開  [m] モード  [?] ヘルプ",
     };
 
     let text = fit_width(

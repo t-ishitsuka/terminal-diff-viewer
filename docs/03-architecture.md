@@ -57,12 +57,13 @@ src/
 pub struct AppState {
     pub repo: Option<RepoContext>,   // Git リポジトリ外でも tree モードは動く
     pub root: PathBuf,               // 表示ルート
-    pub mode: Mode,                  // Tree | Diff
+    pub mode: Mode,                  // Tree | Diff | Log
     pub focus: Focus,                // Tree | Content
     pub overlay: Overlay,            // None | Help | Search(Input) | Filter(Input)
     pub layout: LayoutState,         // 左ペイン比率、折り返し、side-by-side/unified
     pub fs_tree: TreeModel,          // tree モード用
     pub change_tree: TreeModel,      // diff モード用 (ChangeSet から構築)
+    pub log_tree: TreeModel,         // log モード用 (コミット → 変更ファイル)
     pub changes: ChangeSet,          // 変更ファイル一覧
     pub content: ContentState,       // 右ペインの内容
     pub search: SearchState,
@@ -212,6 +213,8 @@ index を書き換える操作 (stage / unstage) は次の手順で行う。エ�
 | `ComputeDiff` | diff モードでファイル選択 | `AlignedDiff` |
 | `Highlight` | 本文の表示後、可視範囲 → 全文の順 (差分は左右それぞれ) | 行ごとのスタイル |
 | `Stage` | `a` / `U` の押下 | index 書き換えの成否 |
+| `ScanLog` | log モードへの切り替え / 末尾への接近 | コミット一覧 (200 件ずつ) |
+| `CommitFiles` | コミット行の選択 / 展開 | そのコミットの比較対象と変更一覧 |
 
 ### 5.3 陳腐化の破棄
 

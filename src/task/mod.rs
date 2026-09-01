@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use crate::diff::{LineTable, align};
-use crate::git::{DiffSpec, FileChange, GitBackend, Loaded, Side};
+use crate::git::{ChangeSet, CommitInfo, DiffSpec, FileChange, GitBackend, Loaded, Side};
 use crate::highlight::highlight;
 
 pub struct WorkerCtx {
@@ -91,6 +91,28 @@ fn handle(ctx: &WorkerCtx, request: TaskRequest) -> TaskResult {
                 outcome,
             }
         }
+        TaskRequest::ScanLog {
+            generation,
+            skip,
+            limit,
+        } => TaskResult::Log {
+            generation,
+            skip,
+            outcome: scan_log(ctx, skip, limit).map_err(|e| format!("{e:#}")),
+        },
+        TaskRequest::CommitFiles {
+            generation,
+            node,
+            id,
+        } => {
+            let outcome = commit_files(ctx, &id).map_err(|e| format!("{e:#}"));
+            TaskResult::CommitFiles {
+                generation,
+                node,
+                id,
+                outcome,
+            }
+        }
         TaskRequest::Stage { change, unstage } => {
             let outcome = stage(ctx, &change, unstage).map_err(|e| format!("{e:#}"));
             TaskResult::Staged {
@@ -165,4 +187,23 @@ fn stage(ctx: &WorkerCtx, change: &FileChange, unstage: bool) -> anyhow::Result<
     } else {
         backend.stage(change)
     }
+}
+
+fn scan_log(ctx: &WorkerCtx, skip: usize, limit: usize) -> anyhow::Result<Vec<CommitInfo>> {
+    let backend = ctx
+        .backend
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Git リポジトリではない"))?;
+    backend.log(skip, limit)
+}
+
+/// コミット 1 件の比較対象を決めてから、その変更一覧を取る。
+fn commit_files(ctx: &WorkerCtx, id: &str) -> anyhow::Result<(DiffSpec, ChangeSet)> {
+    let backend = ctx
+        .backend
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Git リポジトリではない"))?;
+    let spec = backend.commit_spec(id)?;
+    let changes = backend.changes(&spec)?;
+    Ok((spec, changes))
 }

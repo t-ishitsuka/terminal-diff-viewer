@@ -28,10 +28,10 @@ pub fn apply(app: &mut App, action: Action) {
             };
         }
         Action::ToggleMode => {
-            let next = if app.mode == Mode::Tree {
-                Mode::Diff
-            } else {
-                Mode::Tree
+            let next = match app.mode {
+                Mode::Tree => Mode::Diff,
+                Mode::Diff => Mode::Log,
+                Mode::Log => Mode::Tree,
             };
             set_mode(app, next);
         }
@@ -51,11 +51,13 @@ pub fn apply(app: &mut App, action: Action) {
         Action::TreeMove(delta) => {
             app.tree().move_selection(delta);
             app.request_content();
+            maybe_load_more_log(app);
         }
         Action::TreeHalfPage(dir) => {
             let step = (app.tree_height / 2).max(1) as isize;
             app.tree().move_selection(step * dir as isize);
             app.request_content();
+            maybe_load_more_log(app);
         }
         Action::TreeFirst => {
             app.tree().select_first();
@@ -64,6 +66,7 @@ pub fn apply(app: &mut App, action: Action) {
         Action::TreeLast => {
             app.tree().select_last();
             app.request_content();
+            maybe_load_more_log(app);
         }
         Action::TreeOpen => tree_open(app),
         Action::TreeCollapse => tree_collapse(app),
@@ -199,8 +202,11 @@ fn set_mode(app: &mut App, mode: Mode) {
     if app.mode == mode {
         return;
     }
-    if mode == Mode::Diff && app.backend.is_none() {
-        app.notice = Some("Git リポジトリではないため diff モードを使えない".into());
+    if mode != Mode::Tree && app.backend.is_none() {
+        let name = if mode == Mode::Diff { "diff" } else { "log" };
+        app.notice = Some(format!(
+            "Git リポジトリではないため {name} モードを使えない"
+        ));
         return;
     }
     let current = app.tree().selected_node().map(|n| n.path.clone());
@@ -214,12 +220,21 @@ fn set_mode(app: &mut App, mode: Mode) {
     if app.tree().selected_id().is_none() {
         app.tree().select_first();
     }
+    // log モードは初回だけ一覧を読む
+    if mode == Mode::Log && app.log_commits.is_empty() {
+        app.request_log(0);
+    }
     app.request_content();
 }
 
 fn reload(app: &mut App) {
     app.request_status();
     reload_fs_tree(app);
+    // 一度でも読んでいれば履歴も作り直す
+    if !app.log_commits.is_empty() {
+        app.reset_log();
+        app.request_log(0);
+    }
     app.request_content();
 }
 
@@ -702,6 +717,68 @@ pub fn on_task(app: &mut App, result: TaskResult) {
                 }
             }
         }
+
+        TaskResult::Log {
+            generation,
+            skip,
+            outcome,
+        } => {
+            let _ = generation;
+            match outcome {
+                Ok(commits) => {
+                    // 取り直しでない追加読み込みだけを反映する
+                    if skip != app.log_commits.len() {
+                        return;
+                    }
+                    app.log_end = commits.len() < app.log_page;
+                    for info in commits {
+                        let node = Node::dir(
+                            info.label(),
+                            PathBuf::from(&info.id),
+                            0,
+                            Some(TreeModel::ROOT),
+                        );
+                        app.log_tree.push_child(TreeModel::ROOT, node);
+                        app.log_commits.push(info);
+                    }
+                    if app.mode == Mode::Log && app.content_is_empty() {
+                        app.request_content();
+                    }
+                }
+                Err(error) => app.notice = Some(format!("コミットを読めない: {error}")),
+            }
+        }
+
+        TaskResult::CommitFiles {
+            generation,
+            node,
+            id,
+            outcome,
+        } => {
+            if generation != app.generation {
+                return;
+            }
+            match outcome {
+                Ok((spec, changes)) => {
+                    if app.log_tree.node_count() > node as usize
+                        && app.log_tree.children_count(node) == 0
+                    {
+                        let depth = app.log_tree.node(node).depth + 1;
+                        for change in &changes.files {
+                            let name = change.path.display().to_string();
+                            let child = Node::file(name, change.path.clone(), depth, Some(node));
+                            let child = app.log_tree.push_child(node, child);
+                            app.log_tree.set_status(child, Some(change.kind));
+                        }
+                        app.log_tree.mark_loaded(node);
+                    }
+                    app.log_specs.insert(id.clone(), spec);
+                    app.log_changes.insert(id.clone(), changes.clone());
+                    app.show_commit_summary(&id, &changes);
+                }
+                Err(error) => app.notice = Some(format!("{id} の変更を読めない: {error}")),
+            }
+        }
     }
 }
 
@@ -766,5 +843,21 @@ fn apply_range(app: &mut App, input: &str) {
             app.request_status();
         }
         Err(message) => app.notice = Some(message),
+    }
+}
+
+/// log モードで末尾に近づいたら次のページを読む。
+fn maybe_load_more_log(app: &mut App) {
+    if app.mode != Mode::Log || app.log_end {
+        return;
+    }
+    let loaded = app.log_commits.len();
+    if loaded == 0 {
+        return;
+    }
+    // 残り 20 行を切ったら先読みする
+    let selected = app.log_tree.selected_index();
+    if selected + 20 >= app.log_tree.visible_len() {
+        app.request_log(loaded);
     }
 }

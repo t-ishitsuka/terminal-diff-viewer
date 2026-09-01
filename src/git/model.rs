@@ -136,3 +136,22 @@ pub struct HeadInfo {
     /// ブランチ名。detached HEAD なら短縮ハッシュ。
     pub name: String,
 }
+
+/// コミット一覧の 1 件分。表示に必要な情報だけを持つ。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitInfo {
+    /// 完全なハッシュ。比較対象の指定に使う。
+    pub id: String,
+    pub short: String,
+    pub subject: String,
+    pub author: String,
+    /// ローカル時刻の `YYYY-MM-DD HH:MM`。
+    pub time: String,
+}
+
+impl CommitInfo {
+    /// ツリーに出す 1 行。
+    pub fn label(&self) -> String {
+        format!("{} {}", self.short, self.subject)
+    }
+}

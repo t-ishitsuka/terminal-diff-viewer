@@ -6,16 +6,21 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::diff::{AlignedDiff, InlineSpans, LineTable, RowKind, inline_diff};
 use crate::git::{
-    ChangeKind, ChangeSet, DiffSpec, FileChange, GitBackend, HeadInfo, UnsupportedReason,
+    ChangeKind, ChangeSet, CommitInfo, DiffSpec, FileChange, GitBackend, HeadInfo,
+    UnsupportedReason,
 };
 use crate::highlight::Highlighted;
 use crate::task::{HighlightTarget, Pool, TaskRequest};
 use crate::vfs::{Node, TreeModel};
 
+/// コミット一覧を 1 度に読む件数。
+pub const LOG_PAGE: usize = 200;
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Mode {
     Tree,
     Diff,
+    Log,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -324,6 +329,16 @@ pub struct App {
     pub overlay: Overlay,
     pub fs_tree: TreeModel,
     pub change_tree: TreeModel,
+    pub log_tree: TreeModel,
+    /// 読み込み済みのコミット。ツリーの並びと同じ順。
+    pub log_commits: Vec<CommitInfo>,
+    /// コミット id ごとの比較対象と変更一覧。展開時に埋める。
+    pub log_specs: HashMap<String, DiffSpec>,
+    pub log_changes: HashMap<String, ChangeSet>,
+    /// これ以上さかのぼれない (末尾まで読んだ)。
+    pub log_end: bool,
+    /// コミット一覧を 1 度に読む件数。
+    pub log_page: usize,
     pub changes: ChangeSet,
     pub content: ContentState,
     pub search: SearchState,
@@ -369,6 +384,12 @@ impl App {
             overlay: Overlay::None,
             fs_tree: TreeModel::new(),
             change_tree: TreeModel::new(),
+            log_tree: TreeModel::new(),
+            log_commits: Vec::new(),
+            log_specs: HashMap::new(),
+            log_changes: HashMap::new(),
+            log_end: false,
+            log_page: LOG_PAGE,
             changes: ChangeSet::default(),
             content: ContentState::Empty,
             search: SearchState::default(),
@@ -398,6 +419,7 @@ impl App {
         match self.mode {
             Mode::Tree => &mut self.fs_tree,
             Mode::Diff => &mut self.change_tree,
+            Mode::Log => &mut self.log_tree,
         }
     }
 
@@ -490,6 +512,10 @@ impl App {
             self.content = ContentState::Empty;
             return;
         };
+        if self.mode == Mode::Log {
+            self.request_log_content(&node);
+            return;
+        }
         if node.is_dir() {
             self.content = ContentState::Empty;
             return;
@@ -522,9 +548,118 @@ impl App {
                     spec: self.diff_spec.clone(),
                 });
             }
+            Mode::Log => unreachable!("log モードは先に返している"),
         }
     }
 
+    /// log モードの右ペイン。コミット行なら概要、ファイル行ならそのコミットの差分。
+    fn request_log_content(&mut self, node: &Node) {
+        let generation = self.next_generation();
+        self.search.clear();
+        if node.is_dir() {
+            let id = node.path.to_string_lossy().into_owned();
+            self.content = ContentState::Loading {
+                path: PathBuf::from(&id[..id.len().min(7)]),
+            };
+            if let Some(changes) = self.log_changes.get(&id) {
+                self.show_commit_summary(&id, &changes.clone());
+                return;
+            }
+            let Some(tree_node) = self.log_tree.selected_id() else {
+                return;
+            };
+            self.pool.submit(TaskRequest::CommitFiles {
+                generation,
+                node: tree_node,
+                id,
+            });
+            return;
+        }
+
+        let Some(commit) = self.selected_log_commit_id() else {
+            self.content = ContentState::Empty;
+            return;
+        };
+        let (Some(spec), Some(changes)) = (
+            self.log_specs.get(&commit).cloned(),
+            self.log_changes.get(&commit),
+        ) else {
+            self.content = ContentState::Empty;
+            return;
+        };
+        let Some(change) = changes.find(&node.path).cloned() else {
+            self.content = ContentState::Empty;
+            return;
+        };
+        self.content = ContentState::Loading {
+            path: node.path.clone(),
+        };
+        self.pool.submit(TaskRequest::ComputeDiff {
+            generation,
+            change,
+            spec,
+        });
+    }
+
+    /// 選択中のノードが属するコミットの id。コミット行ならそれ自身。
+    pub fn selected_log_commit_id(&mut self) -> Option<String> {
+        let id = self.log_tree.selected_id()?;
+        let node = self.log_tree.node(id);
+        let commit_node = if node.is_dir() {
+            id
+        } else {
+            self.log_tree.parent_of(id)?
+        };
+        Some(
+            self.log_tree
+                .node(commit_node)
+                .path
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+
+    /// コミットの概要 (メタ情報と変更ファイル一覧) を右ペインに出す。
+    pub fn show_commit_summary(&mut self, id: &str, changes: &ChangeSet) {
+        let Some(info) = self.log_commits.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        let mut text = format!(
+            "commit {}\nAuthor: {}\nDate:   {}\n\n    {}\n\n変更 {} 件\n",
+            info.id,
+            info.author,
+            info.time,
+            info.subject,
+            changes.files.len()
+        );
+        for change in &changes.files {
+            text.push_str(&format!(
+                "{} {}\n",
+                change.kind.marker(),
+                change.path.display()
+            ));
+        }
+        self.content = ContentState::Text(Box::new(TextView {
+            path: PathBuf::from(info.short),
+            table: LineTable::new(Arc::from(text.into_bytes())),
+            highlight: None,
+            offset: 0,
+            hscroll: 0,
+        }));
+    }
+
+    /// コミット一覧を追加で読む。既定では起動時と末尾に近づいたときに呼ばれる。
+    pub fn request_log(&mut self, skip: usize) {
+        if self.backend.is_none() {
+            return;
+        }
+        let generation = self.next_generation();
+        self.pool.submit(TaskRequest::ScanLog {
+            generation,
+            skip,
+            limit: self.log_page,
+        });
+    }
     /// 現在のソート順で並べたファイル一覧。パス順は取得時点で整列済み。
     fn sorted_changes(&self) -> Vec<&FileChange> {
         let mut files: Vec<&FileChange> = self.changes.files.iter().collect();
@@ -620,4 +755,15 @@ fn ensure_dir(tree: &mut TreeModel, dirs: &mut HashMap<PathBuf, u32>, path: &Pat
     tree.expand(id);
     dirs.insert(path.to_path_buf(), id);
     id
+}
+
+impl App {
+    /// コミット一覧を破棄して読み直す準備をする。
+    pub fn reset_log(&mut self) {
+        self.log_tree = TreeModel::new();
+        self.log_commits.clear();
+        self.log_specs.clear();
+        self.log_changes.clear();
+        self.log_end = false;
+    }
 }

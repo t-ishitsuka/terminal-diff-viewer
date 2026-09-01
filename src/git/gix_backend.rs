@@ -109,6 +109,73 @@ impl Acc {
     }
 }
 
+/// コミット履歴。
+impl GixBackend {
+    fn log_impl(&self, skip: usize, limit: usize) -> Result<Vec<CommitInfo>> {
+        let repo = self.repo.to_thread_local();
+        let Ok(head) = repo.head_id() else {
+            // コミットが 1 つも無いリポジトリでは空の履歴を返す
+            return Ok(Vec::new());
+        };
+        let walk = repo
+            .rev_walk([head.detach()])
+            .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
+            ))
+            .all()
+            .context("コミットを辿れない")?;
+
+        let mut out = Vec::with_capacity(limit);
+        for info in walk.skip(skip).take(limit) {
+            let info = info.context("コミットの読み取りに失敗")?;
+            let commit = info.object().context("コミットを開けない")?;
+            let id = info.id.to_hex().to_string();
+            let short = info.id.to_hex_with_len(7).to_string();
+            let subject = commit
+                .message()
+                .map(|m| m.summary().to_string())
+                .unwrap_or_default();
+            let (author, time) = match commit.author() {
+                Ok(a) => {
+                    let time = a
+                        .time()
+                        .map(|t| t.format_or_unix(gix::date::time::format::SHORT))
+                        .unwrap_or_default();
+                    (a.name.to_string(), time)
+                }
+                Err(_) => (String::new(), String::new()),
+            };
+            out.push(CommitInfo {
+                id,
+                short,
+                subject,
+                author,
+                time,
+            });
+        }
+        Ok(out)
+    }
+
+    /// コミット 1 件の差分を表す比較対象。親が無いコミットは空ツリーと比べる。
+    fn commit_spec_impl(&self, id: &str) -> Result<DiffSpec> {
+        let repo = self.repo.to_thread_local();
+        let commit = repo
+            .rev_parse_single(id)
+            .with_context(|| format!("{id} を解決できない"))?
+            .object()?
+            .try_into_commit()
+            .with_context(|| format!("{id} はコミットではない"))?;
+        let from = commit
+            .parent_ids()
+            .next()
+            .map(|p| p.detach().to_hex().to_string())
+            .unwrap_or_default();
+        Ok(DiffSpec::Range {
+            from,
+            to: commit.id().to_hex().to_string(),
+        })
+    }
+}
 /// ref 間比較。ツリー同士を比較するため作業ツリーも index も読まない。
 impl GixBackend {
     fn changes_between(&self, from: &str, to: &str) -> Result<ChangeSet> {
@@ -450,6 +517,14 @@ impl GitBackend for GixBackend {
                 }
             }
         }
+    }
+
+    fn log(&self, skip: usize, limit: usize) -> Result<Vec<CommitInfo>> {
+        self.log_impl(skip, limit)
+    }
+
+    fn commit_spec(&self, id: &str) -> Result<DiffSpec> {
+        self.commit_spec_impl(id)
     }
 
     fn stage(&self, change: &FileChange) -> Result<()> {

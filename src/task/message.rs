@@ -4,7 +4,7 @@ use std::sync::Arc;
 use ratatui::crossterm::event::Event;
 
 use crate::diff::{AlignedDiff, LineTable};
-use crate::git::{ChangeSet, DiffSpec, FileChange, HeadInfo, UnsupportedReason};
+use crate::git::{ChangeSet, CommitInfo, DiffSpec, FileChange, HeadInfo, UnsupportedReason};
 use crate::highlight::Highlighted;
 use crate::vfs::DirEntry;
 
@@ -32,6 +32,18 @@ pub enum TaskRequest {
         generation: u64,
         change: FileChange,
         spec: DiffSpec,
+    },
+    /// コミット一覧の取得。skip から limit 件を新しい順に読む。
+    ScanLog {
+        generation: u64,
+        skip: usize,
+        limit: usize,
+    },
+    /// コミット 1 件の変更ファイル一覧。
+    CommitFiles {
+        generation: u64,
+        node: u32,
+        id: String,
     },
     /// index の書き換え。unstage が true なら HEAD の内容へ戻す。
     Stage {
@@ -107,6 +119,17 @@ pub enum TaskResult {
         path: PathBuf,
         unstage: bool,
         outcome: Result<(), String>,
+    },
+    Log {
+        generation: u64,
+        skip: usize,
+        outcome: Result<Vec<CommitInfo>, String>,
+    },
+    CommitFiles {
+        generation: u64,
+        node: u32,
+        id: String,
+        outcome: Result<(DiffSpec, ChangeSet), String>,
     },
 }
 
