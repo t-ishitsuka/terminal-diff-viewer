@@ -42,6 +42,7 @@ pub enum Action {
     CycleDiffSpec,
     Stage,
     Unstage,
+    ToggleWatch,
 
     StartSearch,
     StartFilter,
@@ -115,6 +116,7 @@ impl KeyMap {
             KeyCode::Char('s') if !ctrl => return Action::CycleDiffSpec,
             KeyCode::Char('R') => return Action::StartRange,
             KeyCode::Char('L') => return Action::SetMode(Mode::Log),
+            KeyCode::Char('W') => return Action::ToggleWatch,
             KeyCode::Tab => return Action::CycleFocus(1),
             KeyCode::BackTab => return Action::CycleFocus(-1),
             KeyCode::Char('<') => return Action::ResizeTree(-1),

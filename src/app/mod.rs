@@ -50,5 +50,6 @@ fn handle(app: &mut App, keymap: &mut KeyMap, event: AppEvent) {
         }
         AppEvent::Input(_) => {}
         AppEvent::Task(result) => update::on_task(app, result),
+        AppEvent::FsChanged => update::on_fs_change(app),
     }
 }

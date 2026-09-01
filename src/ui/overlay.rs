@@ -37,6 +37,7 @@ const HELP: &[(&str, &str)] = &[
     ("a", "選択中のファイルを stage"),
     ("U", "選択中のファイルを unstage"),
     ("R", "ref 間比較を指定 (例 HEAD~3..HEAD)"),
+    ("W", "作業ツリーの自動追従をトグル"),
 ];
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {

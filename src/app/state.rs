@@ -355,6 +355,8 @@ pub struct App {
     pub unified: bool,
     /// 内容ペインの行折り返し。
     pub wrap: bool,
+    /// 作業ツリーの変更を自動で取り込むか。
+    pub watch: bool,
     pub scanning: bool,
     pub should_quit: bool,
     /// ツリー再構築時に展開状態と選択を復元するための保留情報。
@@ -373,6 +375,7 @@ impl App {
         pool: Pool,
     ) -> Self {
         let tree_ratio = cfg.tree_ratio;
+        let cfg_watch = cfg.watch;
         let mut app = Self {
             cfg,
             root,
@@ -403,6 +406,7 @@ impl App {
             diff_spec: DiffSpec::WorktreeVsHead,
             unified: false,
             wrap: false,
+            watch: cfg_watch,
             scanning: false,
             should_quit: false,
             pending_expand: HashSet::new(),

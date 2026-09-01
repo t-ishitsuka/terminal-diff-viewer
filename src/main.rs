@@ -57,10 +57,29 @@ fn main() -> Result<()> {
         backend: backend.clone(),
         max_file_bytes: cfg.max_file_bytes,
     });
-    let pool = Pool::spawn(workers, ctx, tx);
+    let pool = Pool::spawn(workers, ctx, tx.clone());
+
+    // 監視は開始できなくても起動を止めない (inotify の上限などで失敗しうる)。
+    // ハンドルを保持している間だけ監視が続く。
+    let mut watch_error = None;
+    let _watcher = if cfg.watch {
+        match tdv::watch::spawn(&root, tx) {
+            Ok(watcher) => Some(watcher),
+            Err(error) => {
+                watch_error = Some(format!("{error:#}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // 起動は常に tree モード。diff へは起動後に m / d で切り替える
     let mut application = App::new(cfg, root, backend, pool);
+    if let Some(error) = watch_error {
+        application.watch = false;
+        application.notice = Some(format!("自動追従を開始できない: {error}"));
+    }
 
     // ratatui::try_init が raw mode / alternate screen への移行とパニックフックを設定する
     let mut terminal = ratatui::try_init().context("端末を初期化できない")?;

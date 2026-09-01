@@ -127,6 +127,7 @@ pub fn apply(app: &mut App, action: Action) {
             }
             app.request_status();
         }
+        Action::ToggleWatch => app.watch = !app.watch,
         Action::Stage => stage_selected(app, false),
         Action::Unstage => stage_selected(app, true),
         Action::CycleSort => {
@@ -860,4 +861,14 @@ fn maybe_load_more_log(app: &mut App) {
     if selected + 20 >= app.log_tree.visible_len() {
         app.request_log(loaded);
     }
+}
+
+/// 作業ツリーの変更通知。状態と表示中の内容を取り直す。
+pub fn on_fs_change(app: &mut App) {
+    if !app.watch {
+        return;
+    }
+    app.request_status();
+    // 表示中のファイル自体が書き換わっている場合もあるため読み直す
+    app.request_content();
 }

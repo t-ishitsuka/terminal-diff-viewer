@@ -10,6 +10,7 @@ clap = { version = "4.6.6", features = ["derive"] }
 gix = { version = "=0.87.1", default-features = false, features = ["status", "blob-diff", "dirwalk", "revision", "parallel", "max-performance-safe", "sha1"] }
 ignore = "0.4.33"
 lru = "0.18.2"
+notify = "8.2.0"
 ratatui = "0.30"
 serde = { version = "1.0.229", features = ["derive"] }
 syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "dump-load", "parsing", "regex-fancy"] }

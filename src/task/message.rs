@@ -136,4 +136,6 @@ pub enum TaskResult {
 pub enum AppEvent {
     Input(Event),
     Task(TaskResult),
+    /// 作業ツリーの変更を検知した (まとめて 1 回)。
+    FsChanged,
 }

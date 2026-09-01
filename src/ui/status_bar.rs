@@ -125,6 +125,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     if app.diff_spec != DiffSpec::WorktreeVsHead {
         states.push(app.diff_spec.label());
     }
+    if !app.watch {
+        states.push("監視停止".into());
+    }
     let states = if states.is_empty() {
         String::new()
     } else {

@@ -31,6 +31,7 @@ nix build              # Nix パッケージとしてビルド
 | `z` | ツリー: 展開トグル  内容: 折り畳みトグル |
 | `u` / `w` | side-by-side / unified 切替  行折り返しトグル |
 | `I` / `T` / `S` | ignore 表示 / 階層表示 / 並び順 (パス・変更種別) のトグル |
+| `W` | 作業ツリーの自動追従をトグル |
 | `s` | 比較対象のトグル (作業ツリー↔HEAD / staged↔HEAD / 作業ツリー↔index) |
 | `a` / `U` | 選択中のファイルを stage / unstage (ファイル単位) |
 | `R` | ref 間比較の指定 (例 `HEAD~3..HEAD`) |
@@ -56,6 +57,7 @@ tab_width = 4
 ambiguous_width_wide = false
 syntax_highlight = true
 max_highlight_lines = 20000
+watch = true                # 作業ツリーを監視して自動で取り込む
 
 [diff]
 full_file = true            # 既定で全行表示
@@ -110,14 +112,14 @@ syntax = "tdv-dark"         # tdv-light や syntect 付属のテーマも指定�
 | stage / unstage (実装済み) | ファイル単位のみ。commit は入れない |
 | 任意 ref 間比較 (実装済み) | `HEAD~3..HEAD` のような指定を起動後に受ける |
 | コミット履歴モード (実装済み) | 左ペインにコミット一覧を出し、選んだコミットの差分を表示 |
-| ファイル変更の自動追従 | 作業ツリーを監視して自動更新。既定 ON |
+| ファイル変更の自動追従 (実装済み) | 作業ツリーを監視して自動更新。既定 ON |
 
 外部エディタ連携・マージコンフリクト・サブモジュールの再帰表示・SSH 越しの読み取り・キーマップ上書き・行コピーは対象外。
 
 ## 開発
 
 ```sh
-cargo test                 # 単体 56 + 統合 30
+cargo test                 # 単体 58 + 統合 33
 cargo clippy --all-targets
 nix build                  # サンドボックス内でテストごとビルド
 

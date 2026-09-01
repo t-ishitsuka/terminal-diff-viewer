@@ -216,6 +216,8 @@ index を書き換える操作 (stage / unstage) は次の手順で行う。エ�
 | `ScanLog` | log モードへの切り替え / 末尾への接近 | コミット一覧 (200 件ずつ) |
 | `CommitFiles` | コミット行の選択 / 展開 | そのコミットの比較対象と変更一覧 |
 
+監視スレッドは `notify` のイベントをまとめ、`AppEvent::FsChanged` として単一チャネルへ流す。タスクではないが、経路は他のイベントと同じ。
+
 ### 5.3 陳腐化の破棄
 
 ユーザーがツリーを高速に移動すると、完了前のタスクが積み上がる。
@@ -269,6 +271,7 @@ tab_width = 4
 ambiguous_width_wide = false
 syntax_highlight = true
 max_highlight_lines = 20000 # これを超える行数は色付けしない
+watch = true                # 作業ツリーを監視して自動で取り込む
 
 [diff]
 full_file = true            # 既定で全行表示

@@ -24,6 +24,8 @@ pub struct Config {
     /// これを超える行数のファイルは色付けしない。
     pub max_highlight_lines: usize,
     pub palette: Palette,
+    /// 作業ツリーを監視して自動で取り込むか。
+    pub watch: bool,
 }
 
 impl Default for Config {
@@ -40,6 +42,7 @@ impl Default for Config {
             syntax_theme: DEFAULT_THEME.to_string(),
             max_highlight_lines: 20_000,
             palette: Palette::RedGreen,
+            watch: true,
         }
     }
 }
@@ -90,6 +93,7 @@ struct UiSection {
     ambiguous_width_wide: Option<bool>,
     syntax_highlight: Option<bool>,
     max_highlight_lines: Option<usize>,
+    watch: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -135,6 +139,9 @@ impl FileConfig {
             }
             if let Some(v) = ui.max_highlight_lines {
                 cfg.max_highlight_lines = v;
+            }
+            if let Some(v) = ui.watch {
+                cfg.watch = v;
             }
         }
         if let Some(diff) = self.diff {
@@ -246,5 +253,11 @@ mod tests {
         let cfg = Config::load(Some(&path)).unwrap();
         assert_eq!(cfg.tree_ratio, 8);
         assert_eq!(cfg.palette, Palette::BlueOrange);
+    }
+
+    #[test]
+    fn watch_can_be_disabled() {
+        assert!(Config::default().watch);
+        assert!(!parse("[ui]\nwatch = false\n").unwrap().watch);
     }
 }

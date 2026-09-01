@@ -91,7 +91,7 @@ impl Harness {
             assert!(!remaining.is_zero(), "{label} がタイムアウトした");
             match self.rx.recv_timeout(remaining) {
                 Ok(AppEvent::Task(result)) => update::on_task(&mut self.app, result),
-                Ok(AppEvent::Input(_)) => {}
+                Ok(_) => {}
                 Err(_) => panic!("{label} の待機中にチャネルが閉じた"),
             }
         }
@@ -1310,4 +1310,84 @@ fn log_mode_loads_more_commits_when_reaching_the_end() {
     }
     assert_eq!(h.app.log_commits.len(), 5);
     assert_eq!(log_labels(&mut h).len(), 5);
+}
+
+#[test]
+fn watcher_reports_edits_and_skips_ignored_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("target")).unwrap();
+    std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+    std::fs::write(root.join("watched.txt"), "v1\n").unwrap();
+
+    let (tx, rx) = channel::<AppEvent>();
+    let _watcher = tdv::watch::spawn(root, tx).expect("監視を開始できる");
+
+    // 監視の準備が整うまで少し待つ
+    std::thread::sleep(Duration::from_millis(200));
+    std::fs::write(root.join("watched.txt"), "v2\n").unwrap();
+    let event = rx.recv_timeout(Duration::from_secs(5));
+    assert!(
+        matches!(event, Ok(AppEvent::FsChanged)),
+        "編集が通知されない"
+    );
+
+    // ignore 対象と .git の中は通知しない
+    std::fs::write(root.join("target/out.bin"), "x").unwrap();
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join(".git/index"), "x").unwrap();
+    assert!(
+        rx.recv_timeout(Duration::from_millis(1500)).is_err(),
+        "無視すべきパスで通知が来た"
+    );
+}
+
+#[test]
+fn rapid_edits_are_collapsed_into_one_notification() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("a.txt"), "v0\n").unwrap();
+
+    let (tx, rx) = channel::<AppEvent>();
+    let _watcher = tdv::watch::spawn(root, tx).expect("監視を開始できる");
+    std::thread::sleep(Duration::from_millis(200));
+
+    // 立て続けに書き換えても通知は 1 回にまとまる
+    for i in 0..20 {
+        std::fs::write(root.join("a.txt"), format!("v{i}\n")).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        matches!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(AppEvent::FsChanged)
+        ),
+        "通知が来ない"
+    );
+    let extra = std::iter::from_fn(|| rx.recv_timeout(Duration::from_millis(800)).ok()).count();
+    assert!(extra <= 1, "通知がまとまっていない (追加 {extra} 件)");
+}
+
+#[test]
+fn fs_change_reloads_status_and_content() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_repo(dir.path());
+    let mut h = Harness::new(dir.path(), 120, 30);
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+    let before = h.app.status_generation;
+
+    // 監視スレッドを使わず、通知の処理だけを確かめる
+    std::fs::write(dir.path().join("src/added.rs"), "added2\n").unwrap();
+    update::on_fs_change(&mut h.app);
+    h.pump_until("再取得", |app| {
+        app.status_generation > before && !app.scanning
+    });
+    assert!(!h.app.changes.files.is_empty());
+
+    // 監視を止めると何もしない
+    h.act(Action::ToggleWatch);
+    assert!(!h.app.watch);
+    let stopped = h.app.status_generation;
+    update::on_fs_change(&mut h.app);
+    assert_eq!(h.app.status_generation, stopped, "停止中に再取得している");
 }

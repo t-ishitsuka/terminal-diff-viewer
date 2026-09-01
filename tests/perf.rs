@@ -79,7 +79,7 @@ impl Harness {
             assert!(!remaining.is_zero(), "{label} がタイムアウトした");
             match self.rx.recv_timeout(remaining) {
                 Ok(AppEvent::Task(result)) => update::on_task(&mut self.app, result),
-                Ok(AppEvent::Input(_)) => {}
+                Ok(_) => {}
                 Err(_) => panic!("{label} の待機中にチャネルが閉じた"),
             }
         }

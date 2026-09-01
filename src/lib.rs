@@ -7,3 +7,4 @@ pub mod highlight;
 pub mod task;
 pub mod ui;
 pub mod vfs;
+pub mod watch;
