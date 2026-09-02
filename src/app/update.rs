@@ -59,6 +59,12 @@ pub fn apply(app: &mut App, action: Action) {
             app.request_content();
             maybe_load_more_log(app);
         }
+        Action::TreePage(dir) => {
+            let step = app.tree_height.max(1) as isize;
+            app.tree().move_selection(step * dir as isize);
+            app.request_content();
+            maybe_load_more_log(app);
+        }
         Action::TreeFirst => {
             app.tree().select_first();
             app.request_content();
