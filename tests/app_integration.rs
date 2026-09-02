@@ -1540,3 +1540,71 @@ fn tree_markers_match_git_porcelain() {
 
     assert_eq!(shown, expected, "\n{screen}");
 }
+
+/// キー割り当てを通して押下を再現する。
+fn press(h: &mut Harness, code: ratatui::crossterm::event::KeyCode) {
+    use ratatui::crossterm::event::KeyEvent;
+    let mut keymap = tdv::app::KeyMap::default();
+    let action = keymap.map(KeyEvent::from(code), h.app.focus, &h.app.overlay);
+    update::apply(&mut h.app, action);
+}
+
+#[test]
+fn page_keys_move_by_one_screen_in_the_focused_pane() {
+    use ratatui::crossterm::event::KeyCode;
+
+    let dir = tempfile::tempdir().unwrap();
+    // 内容は 1 画面より長く、ツリーは 1 画面より項目が多い状態を作る
+    git(dir.path(), &["init", "-q", "-b", "main"]);
+    std::fs::write(dir.path().join("big.txt"), numbered(60)).unwrap();
+    for i in 0..12 {
+        std::fs::write(dir.path().join(format!("f{i:02}.txt")), "v1\n").unwrap();
+    }
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-q", "-m", "init"]);
+    std::fs::write(
+        dir.path().join("big.txt"),
+        numbered(60).replace("line 10\n", "line 10 changed\n"),
+    )
+    .unwrap();
+
+    let mut h = Harness::new(dir.path(), 120, 16);
+    h.pump_until("status 取得", |app| !app.changes.files.is_empty());
+    h.act(Action::SetMode(Mode::Diff));
+    h.pump_until("差分の計算", |app| {
+        matches!(&app.content, ContentState::Diff(_))
+    });
+    h.render();
+
+    // 内容ペインでは 1 画面分スクロールする
+    h.act(Action::CycleFocus(1));
+    assert_eq!(h.app.focus, Focus::Content);
+    let height = h.app.content_height;
+    assert!(height > 1);
+    press(&mut h, KeyCode::PageDown);
+    let ContentState::Diff(view) = &h.app.content else {
+        panic!("差分が表示されていない");
+    };
+    assert_eq!(view.offset, height, "1 画面分スクロールしていない");
+    press(&mut h, KeyCode::PageUp);
+    let ContentState::Diff(view) = &h.app.content else {
+        panic!("差分が表示されていない");
+    };
+    assert_eq!(view.offset, 0, "戻れていない");
+
+    // ツリーにフォーカスがあるときは選択が動く
+    h.act(Action::CycleFocus(-1));
+    assert_eq!(h.app.focus, Focus::Tree);
+    h.act(Action::SetMode(Mode::Tree));
+    h.pump_until("ルートの読み込み", |app| {
+        app.fs_tree.node_count() > 1
+    });
+    h.act(Action::TreeFirst);
+    press(&mut h, KeyCode::PageDown);
+    assert!(
+        h.app.fs_tree.selected_index() > 0,
+        "ツリーで選択が動いていない"
+    );
+    press(&mut h, KeyCode::PageUp);
+    assert_eq!(h.app.fs_tree.selected_index(), 0, "先頭へ戻れていない");
+}
